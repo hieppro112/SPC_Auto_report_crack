@@ -1,0 +1,10 @@
+# Mẫu cấu hình kết nối DB cho tính năng đếm giờ PO (MANUFASPCPD).
+# Cách dùng: copy file này thành "connection.txt" đặt cạnh auto_scan_crack.exe rồi sửa chuỗi kết nối bên dưới.
+# File connection.txt KHÔNG được commit lên git (đã có trong .gitignore).
+# Dòng bắt đầu bằng # là ghi chú, app bỏ qua.
+
+# Đăng nhập bằng tài khoản Windows:
+Server=TEN_MAY_CHU_SQL;Database=MANUFASPCPD;Integrated Security=True;TrustServerCertificate=True;
+
+# Hoặc đăng nhập bằng tài khoản SQL (xóa dòng trên, bỏ # ở dòng dưới và điền thông tin):
+# Server=TEN_MAY_CHU_SQL;Database=MANUFASPCPD;User Id=TEN_DANG_NHAP;Password=MAT_KHAU;TrustServerCertificate=True;
