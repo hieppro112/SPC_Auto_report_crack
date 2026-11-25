@@ -76,6 +76,7 @@ namespace auto_scan_crack
                 const now = performance.now();
                 if (now - last > MAX_GAP_MS) buf = '';
                 last = now;
+                if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
                 if (e.key === 'Enter') {
                   if (buf.length === LEN) {
                     e.preventDefault();               // không để Enter của máy quét submit form
