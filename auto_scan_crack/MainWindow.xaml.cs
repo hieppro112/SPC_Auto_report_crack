@@ -134,7 +134,7 @@ namespace auto_scan_crack
 
         /// <summary>
         /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift, chờ AttendanceDate rồi nhấn Login,
-        /// chờ trang Operator entry rồi nhập MSNV.
+        /// chờ trang Operator entry rồi nhập MSNV, chờ #lblPO rồi nhập số PO.
         /// </summary>
         private async Task HandlePoScannedAsync(string po)
         {
@@ -164,13 +164,13 @@ namespace auto_scan_crack
 
             _busy = true;
             lblCurrentPO.Text = po;
-            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login và nhập MSNV...");
+            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login, nhập MSNV và PO...");
             try
             {
                 webView.Focus();   // để phím gõ tự động đi vào trang web
-                var error = await _automation.FillLoginAsync(terminalId, msnv);
+                var error = await _automation.FillLoginAsync(terminalId, msnv, po);
                 SetStatus(error is null
-                    ? $"PO: {po} | Đã Login (Terminal \"{terminalId}\") và nhập MSNV \"{msnv}\"  ({DateTime.Now:HH:mm:ss})"
+                    ? $"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})"
                     : $"PO: {po} | Lỗi tự động: {error}");
             }
             catch (Exception ex)

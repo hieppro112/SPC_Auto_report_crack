@@ -38,6 +38,9 @@ namespace auto_scan_crack
         /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
         public const string OperatorInputSelector = "#txtOperatorID";
 
+        /// <summary>Nhãn PO hiện ra sau khi nhập MSNV thành công.</summary>
+        public const string PoLabelSelector = "#lblPO";
+
         /// <summary>Tiền tố id của combobox Shift (các ô ẩn: _SelVal, _hidSelKeys, _hidSelItems, _btnListSelect).</summary>
         public const string ShiftPrefix = "ddlShiftCD";
 
@@ -73,10 +76,10 @@ namespace auto_scan_crack
               const LEN = {{ScanLength}}, MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
               let buf = '', last = 0;
               window.addEventListener('keydown', e => {
+                if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
                 const now = performance.now();
                 if (now - last > MAX_GAP_MS) buf = '';
                 last = now;
-                if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
                 if (e.key === 'Enter') {
                   if (buf.length === LEN) {
                     e.preventDefault();               // không để Enter của máy quét submit form
@@ -103,10 +106,11 @@ namespace auto_scan_crack
         /// <summary>
         /// Trên trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
         /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, sau đó nhấn #btnLogin;
-        /// chờ tối đa 30s cho #lblTitle chứa "Operator entry", rồi nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter.
+        /// chờ tối đa 30s cho #lblTitle chứa "Operator entry", rồi nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter;
+        /// chờ tối đa 30s cho #lblPO hiện ra, nhấn vào, nhập số PO và nhấn Enter.
         /// Trả về null nếu thành công, ngược lại trả về thông báo lỗi.
         /// </summary>
-        public async Task<string?> FillLoginAsync(string terminalId, string msnv, string shift = "1S")
+        public async Task<string?> FillLoginAsync(string terminalId, string msnv, string po, string shift = "1S")
         {
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
@@ -228,8 +232,60 @@ namespace auto_scan_crack
             await Task.Delay(100);
             await PressEnterAsync();
 
+            // 10) MSNV hợp lệ thì trang hiện #lblPO (chờ tối đa 30s) → nhấn vào rồi nhập số PO vừa quét
+            await Task.Delay(500);
+            var lblPo = await WaitVisibleAsync(PoLabelSelector, TimeSpan.FromSeconds(30));
+            if (lblPo is not { } pp)
+                return $"Sau 30 giây không thấy {PoLabelSelector} (có thể MSNV \"{msnv}\" không hợp lệ) nên chưa nhập PO.";
+            await ClickAsync(pp.x, pp.y);
+            await Task.Delay(300);
+
+            // App tự gõ 12 ký tự PO rất nhanh → tạm tắt bộ bắt mã quét để không nhận nhầm là người dùng quét PO mới
+            await SetScanHookPausedAsync(true);
+            try
+            {
+                foreach (var c in po)
+                    await TypeCharAsync(c);
+
+                // Gõ PO xong → nhấn Enter (vẫn trong lúc tạm tắt bộ bắt mã quét để Enter đi thẳng vào trang)
+                await Task.Delay(100);
+                await PressEnterAsync();
+            }
+            finally
+            {
+                await SetScanHookPausedAsync(false);
+            }
+
             return null;
         }
+
+        /// <summary>Chờ phần tử hiện ra trên trang; trả về tọa độ tâm của nó.</summary>
+        private async Task<(double x, double y)?> WaitVisibleAsync(string selector, TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(selector)}});
+                  if (!el) return null;
+                  const s = getComputedStyle(el);
+                  if (s.display === 'none' || s.visibility === 'hidden') return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) return null;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && await EvalAsync(script) is { ValueKind: JsonValueKind.Object } r)
+                    return (r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble());
+                await Task.Delay(200);
+            }
+            return null;
+        }
+
+        private Task SetScanHookPausedAsync(bool paused) =>
+            EvalAsync($"window.__autoScanPaused = {(paused ? "true" : "false")};");
 
         /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
         private async Task<bool> WaitTitleAsync(string text, TimeSpan timeout)
