@@ -29,6 +29,15 @@ namespace auto_scan_crack
         /// <summary>Nút Login.</summary>
         public const string LoginButtonSelector = "#btnLogin";
 
+        /// <summary>Tiêu đề trang sau khi Login.</summary>
+        public const string TitleSelector = "#lblTitle";
+
+        /// <summary>Chữ cần có trong tiêu đề để biết đã sang trang nhập nhân viên.</summary>
+        public const string OperatorEntryTitle = "Operator entry";
+
+        /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
+        public const string OperatorInputSelector = "#txtOperatorID";
+
         /// <summary>Tiền tố id của combobox Shift (các ô ẩn: _SelVal, _hidSelKeys, _hidSelItems, _btnListSelect).</summary>
         public const string ShiftPrefix = "ddlShiftCD";
 
@@ -92,10 +101,11 @@ namespace auto_scan_crack
 
         /// <summary>
         /// Trên trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
-        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, sau đó nhấn #btnLogin.
+        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, sau đó nhấn #btnLogin;
+        /// chờ tối đa 30s cho #lblTitle chứa "Operator entry", rồi nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter.
         /// Trả về null nếu thành công, ngược lại trả về thông báo lỗi.
         /// </summary>
-        public async Task<string?> FillLoginAsync(string terminalId, string shift = "1S")
+        public async Task<string?> FillLoginAsync(string terminalId, string msnv, string shift = "1S")
         {
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
@@ -175,7 +185,68 @@ namespace auto_scan_crack
                 return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
             await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
 
+            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry"
+            await Task.Delay(500);
+            if (!await WaitTitleAsync(OperatorEntryTitle, TimeSpan.FromSeconds(30)))
+                return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
+                return "Trang Operator entry chưa tải xong.";
+
+            // 9) Nhấn vào ô #txtOperatorID rồi nhập MSNV
+            var op = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(OperatorInputSelector)}});
+                  if (!el || el.disabled) return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """);
+            if (op is not { ValueKind: JsonValueKind.Object } o)
+                return "Không tìm thấy ô nhập MSNV (" + OperatorInputSelector + ").";
+            await ClickAsync(o.GetProperty("x").GetDouble(), o.GetProperty("y").GetDouble());
+            await Task.Delay(200);
+
+            // Đảm bảo con trỏ đang ở ô MSNV; nếu ô có sẵn chữ thì bôi đen để gõ đè lên
+            var ready = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(OperatorInputSelector)}});
+                  if (!el) return false;
+                  if (document.activeElement !== el) el.focus();
+                  el.select();
+                  return document.activeElement === el;
+                })()
+                """);
+            if (ready?.ValueKind != JsonValueKind.True)
+                return "Không đưa được con trỏ vào ô MSNV (" + OperatorInputSelector + ").";
+
+            foreach (var c in msnv)
+                await TypeCharAsync(c);
+
+            // Gõ MSNV xong → nhấn Enter (như phím Enter thật)
+            await Task.Delay(100);
+            await PressEnterAsync();
+
             return null;
+        }
+
+        /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
+        private async Task<bool> WaitTitleAsync(string text, TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(TitleSelector)}});
+                  return !!el && el.textContent.toLowerCase().includes({{Js(text.ToLowerInvariant())}});
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
         }
 
         /// <summary>Chờ đến khi ô AttendanceDate (#txtDutyYmd) có dữ liệu (khác rỗng).</summary>

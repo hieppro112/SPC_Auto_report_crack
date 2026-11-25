@@ -133,7 +133,8 @@ namespace auto_scan_crack
         }
 
         /// <summary>
-        /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift, chờ AttendanceDate rồi nhấn Login.
+        /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift, chờ AttendanceDate rồi nhấn Login,
+        /// chờ trang Operator entry rồi nhập MSNV.
         /// </summary>
         private async Task HandlePoScannedAsync(string po)
         {
@@ -147,6 +148,13 @@ namespace auto_scan_crack
                 txtTerminalId.Focus();
                 return;
             }
+            var msnv = txtMsnv.Text.Trim();
+            if (msnv.Length == 0)
+            {
+                SetStatus("Chưa nhập MSNV. Vui lòng nhập MSNV trước khi quét PO.");
+                txtMsnv.Focus();
+                return;
+            }
             if (_automation is null)
             {
                 SetStatus("Trình duyệt chưa sẵn sàng.");
@@ -156,13 +164,13 @@ namespace auto_scan_crack
 
             _busy = true;
             lblCurrentPO.Text = po;
-            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift và Login...");
+            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login và nhập MSNV...");
             try
             {
                 webView.Focus();   // để phím gõ tự động đi vào trang web
-                var error = await _automation.FillLoginAsync(terminalId);
+                var error = await _automation.FillLoginAsync(terminalId, msnv);
                 SetStatus(error is null
-                    ? $"PO: {po} | Đã điền Terminal ID \"{terminalId}\", chọn Shift và nhấn Login  ({DateTime.Now:HH:mm:ss})"
+                    ? $"PO: {po} | Đã Login (Terminal \"{terminalId}\") và nhập MSNV \"{msnv}\"  ({DateTime.Now:HH:mm:ss})"
                     : $"PO: {po} | Lỗi tự động: {error}");
             }
             catch (Exception ex)
