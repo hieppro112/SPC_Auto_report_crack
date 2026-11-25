@@ -20,6 +20,11 @@ namespace auto_scan_crack
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "auto_scan_crack", "terminal_id.txt");
 
+        // MSNV (mã số nhân viên) lưu lại cho lần mở app sau
+        private static readonly string MsnvFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "auto_scan_crack", "msnv.txt");
+
         private WebAutomation? _automation;
         private bool _navigating;
         private bool _busy;   // đang chạy tự động → bỏ qua lần quét chồng lên
@@ -32,8 +37,10 @@ namespace auto_scan_crack
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             LoadTerminalId();
-            // Chưa có Terminal ID thì đưa con trỏ vào ô Terminal ID, có rồi thì vào ô PO
+            txtMsnv.Text = LoadText(MsnvFile, "MSNV");
+            // Ô nào còn trống thì đưa con trỏ vào ô đó trước, đủ rồi thì vào ô PO
             if (string.IsNullOrWhiteSpace(txtTerminalId.Text)) txtTerminalId.Focus();
+            else if (string.IsNullOrWhiteSpace(txtMsnv.Text)) txtMsnv.Focus();
             else txtPO.Focus();
 
             try
@@ -175,7 +182,7 @@ namespace auto_scan_crack
             if (e.Key != Key.Enter) return;
             e.Handled = true;
             SaveTerminalId();
-            txtPO.Focus();  // nhập xong Terminal ID → chuyển sang ô quét PO
+            txtMsnv.Focus();  // nhập xong Terminal ID → chuyển sang ô MSNV
         }
 
         private void TxtTerminalId_LostFocus(object sender, RoutedEventArgs e) => SaveTerminalId();
@@ -203,6 +210,44 @@ namespace auto_scan_crack
             catch (Exception ex)
             {
                 SetStatus("Không lưu được Terminal ID: " + ex.Message);
+            }
+        }
+
+        // ===== MSNV =====
+
+        private void TxtMsnv_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            SaveText(MsnvFile, txtMsnv.Text, "MSNV");
+            txtPO.Focus();  // nhập xong MSNV → chuyển sang ô quét PO
+        }
+
+        private void TxtMsnv_LostFocus(object sender, RoutedEventArgs e) => SaveText(MsnvFile, txtMsnv.Text, "MSNV");
+
+        private string LoadText(string file, string name)
+        {
+            try
+            {
+                return File.Exists(file) ? File.ReadAllText(file).Trim() : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Không đọc được {name} đã lưu: " + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        private void SaveText(string file, string value, string name)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, value.Trim());
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Không lưu được {name}: " + ex.Message);
             }
         }
 
