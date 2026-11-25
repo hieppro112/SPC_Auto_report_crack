@@ -49,8 +49,10 @@ namespace auto_scan_crack
             }
         }
 
-        /// <summary>Quét PO → lấy GOODCNT từ DB và bắt đầu đếm giờ (thay PO đang đếm trước đó).</summary>
-        private async Task StartPoTimerAsync(string po, DateTime scannedAt)
+        /// <summary>
+        /// Nhập PO vào WorkSupportSystem xong → lấy GOODCNT từ DB và bắt đầu đếm giờ (thay PO đang đếm trước đó).
+        /// </summary>
+        private async Task StartPoTimerAsync(string po, DateTime startedAt)
         {
             int? good;
             try
@@ -75,8 +77,8 @@ namespace auto_scan_crack
                 return;
             }
 
-            var state = new PoTimerState(po, good.Value, scannedAt,
-                scannedAt.AddSeconds(good.Value * SecondsPerPiece + ExtraSeconds));
+            var state = new PoTimerState(po, good.Value, startedAt,
+                startedAt.AddSeconds(good.Value * SecondsPerPiece + ExtraSeconds));
             _poTimerState = state;
             SavePoTimer(state);
             _poTimer.Start();

@@ -39,10 +39,10 @@ namespace auto_scan_crack
             LoadTerminalId();
             txtMsnv.Text = LoadText(MsnvFile, "MSNV");
             InitPoTimer();
-            // Ô nào còn trống thì đưa con trỏ vào ô đó trước, đủ rồi thì vào ô PO
-            if (string.IsNullOrWhiteSpace(txtTerminalId.Text)) txtTerminalId.Focus();
-            else if (string.IsNullOrWhiteSpace(txtMsnv.Text)) txtMsnv.Focus();
-            else txtPO.Focus();
+            // Mã quét/gõ được tự phân loại dù con trỏ ở ô nào → luôn để con trỏ ở ô QUÉT MÃ cho dễ thấy
+            txtPO.Focus();
+            if (string.IsNullOrWhiteSpace(txtTerminalId.Text) || string.IsNullOrWhiteSpace(txtMsnv.Text))
+                SetStatus("Quét mã máy (TRTB…) và MSNV trước khi quét PO.");
 
             try
             {
@@ -100,25 +100,48 @@ namespace auto_scan_crack
 
         // ===== Quét PO =====
 
-        private void TxtPO_KeyDown(object sender, KeyEventArgs e)
+        // Mọi phím gõ/quét trong app (con trỏ ở ô nào cũng vậy) đều gom vào bộ đệm này, hiện ở ô QUÉT MÃ;
+        // nhấn Enter thì phân loại mã (mã máy / MSNV / PO) rồi đưa vào đúng chỗ.
+        private readonly System.Text.StringBuilder _scanBuffer = new();
+        private DateTime _lastScanKeyAt = DateTime.MinValue;
+
+        // Ngừng gõ quá lâu thì coi phần đã gõ là bỏ dở → bắt đầu mã mới
+        private static readonly TimeSpan ScanBufferTimeout = TimeSpan.FromSeconds(3);
+
+        private void Window_PreviewTextInput(object sender, TextCompositionEventArgs e)
         {
-            if (e.Key != Key.Enter) return;
-            e.Handled = true;
+            e.Handled = true;   // không cho chữ đi thẳng vào ô đang có con trỏ
+            if (string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
 
-            var code = txtPO.Text.Trim();
-            txtPO.Clear();
-            if (code.Length == 0) return;
+            var now = DateTime.Now;
+            if (now - _lastScanKeyAt > ScanBufferTimeout) _scanBuffer.Clear();
+            _lastScanKeyAt = now;
 
-            if (code.Length != WebAutomation.ScanLength)
-            {
-                ShowError("MÃ PO KHÔNG HỢP LỆ",
-                    $"Mã \"{code}\" có {code.Length} ký tự — mã PO phải đúng {WebAutomation.ScanLength} ký tự.", txtPO);
-                return;
-            }
-            _ = HandlePoScannedAsync(code);
+            _scanBuffer.Append(e.Text.ToUpperInvariant());
+            ShowScanBuffer();
         }
 
-        /// <summary>Trang web báo về khi máy quét gõ chuỗi 12 ký tự lúc con trỏ đang ở trong web.</summary>
+        private void SubmitScanBuffer()
+        {
+            var code = _scanBuffer.ToString().Trim();
+            ClearScanBuffer();
+            if (code.Length > 0)
+                HandleScannedCode(code);
+        }
+
+        private void ClearScanBuffer()
+        {
+            _scanBuffer.Clear();
+            ShowScanBuffer();
+        }
+
+        private void ShowScanBuffer()
+        {
+            txtPO.Text = _scanBuffer.ToString();
+            txtPO.CaretIndex = txtPO.Text.Length;
+        }
+
+        /// <summary>Trang web báo về khi máy quét gõ mã (mã máy / MSNV / PO) lúc con trỏ đang ở trong web.</summary>
         private void Core_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
@@ -126,11 +149,48 @@ namespace auto_scan_crack
                 using var doc = JsonDocument.Parse(e.TryGetWebMessageAsString());
                 var root = doc.RootElement;
                 if (root.GetProperty("type").GetString() == "scan")
-                    _ = HandlePoScannedAsync(root.GetProperty("code").GetString() ?? "");
+                    HandleScannedCode(root.GetProperty("code").GetString() ?? "");
             }
             catch
             {
                 // bỏ qua tin nhắn không đúng định dạng
+            }
+        }
+
+        /// <summary>
+        /// Phân loại mã vừa quét:
+        /// - "TRTB…"     → mã máy: điền vào ô Terminal ID và lưu lại.
+        /// - 4–5 chữ số  → MSNV: điền vào ô MSNV và lưu lại.
+        /// - 12 chữ số   → PO: bắt đầu chạy tự động.
+        /// - Khác        → báo lỗi.
+        /// </summary>
+        private void HandleScannedCode(string raw)
+        {
+            var code = raw.Trim().ToUpperInvariant();
+            switch (ScanClassifier.Classify(code))
+            {
+                case ScanKind.Terminal:
+                    txtTerminalId.Text = code;
+                    SaveTerminalId();
+                    SetStatus($"Đã quét mã máy: {code}  ({DateTime.Now:HH:mm:ss})");
+                    txtPO.Focus();
+                    break;
+
+                case ScanKind.Msnv:
+                    txtMsnv.Text = code;
+                    SaveText(MsnvFile, code, "MSNV");
+                    SetStatus($"Đã quét MSNV: {code}  ({DateTime.Now:HH:mm:ss})");
+                    txtPO.Focus();
+                    break;
+
+                case ScanKind.Po:
+                    _ = HandlePoScannedAsync(code);
+                    break;
+
+                default:
+                    ShowError("MÃ KHÔNG HỢP LỆ",
+                        $"Mã \"{code}\" không phải mã máy (TRTB…), MSNV (4–5 chữ số) hay PO (12 chữ số).", txtPO);
+                    break;
             }
         }
 
@@ -142,7 +202,13 @@ namespace auto_scan_crack
         private async Task HandlePoScannedAsync(string po)
         {
             po = po.Trim().ToUpperInvariant();
-            if (po.Length != WebAutomation.ScanLength) return;
+            if (ScanClassifier.Classify(po) != ScanKind.Po) return;
+
+            if (_busy)
+            {
+                ShowError("ĐANG CHẠY PO KHÁC", $"PO {lblCurrentPO.Text} đang chạy. Vui lòng đợi xong rồi mới quét PO {po}.");
+                return;
+            }
 
             var terminalId = txtTerminalId.Text.Trim();
             if (terminalId.Length == 0)
@@ -161,19 +227,17 @@ namespace auto_scan_crack
                 ShowError("TRÌNH DUYỆT CHƯA SẴN SÀNG", "Vui lòng chờ trang web tải xong rồi quét lại PO.", txtPO);
                 return;
             }
-            if (_busy) return;
-
             _busy = true;
             lblCurrentPO.Text = po;
 
-            // Lấy GOODCNT và bắt đầu đếm giờ cho PO (chạy song song với phần tự động trên web)
-            _ = StartPoTimerAsync(po, DateTime.Now);
+            // Báo xanh 2 giây: đã bắt đầu chạy, không quét thêm PO
+            ShowInfo("BẮT ĐẦU CHẠY PO", $"PO: {po}\nVui lòng không quét thêm PO cho đến khi hoàn tất.", 2);
 
             SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login, nhập MSNV và PO...");
             try
             {
                 webView.Focus();   // để phím gõ tự động đi vào trang web
-                var error = await _automation.FillLoginAsync(terminalId, msnv, po);
+                var error = await _automation.RunAsync(terminalId, msnv, po);
                 if (error is null)
                 {
                     SetStatus($"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})");
@@ -246,19 +310,12 @@ namespace auto_scan_crack
             WorkSupportApp.PressEnter();
 
             SetStatus($"PO: {po} | Đã nhập PO vào WorkSupportSystem  ({DateTime.Now:HH:mm:ss})");
+
+            // Xong thao tác với WorkSupportSystem → lấy GOODCNT và bắt đầu đếm giờ cho PO từ lúc này
+            await StartPoTimerAsync(po, DateTime.Now);
         }
 
         // ===== Terminal ID =====
-
-        private void TxtTerminalId_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key != Key.Enter) return;
-            e.Handled = true;
-            SaveTerminalId();
-            txtMsnv.Focus();  // nhập xong Terminal ID → chuyển sang ô MSNV
-        }
-
-        private void TxtTerminalId_LostFocus(object sender, RoutedEventArgs e) => SaveTerminalId();
 
         private void LoadTerminalId()
         {
@@ -287,16 +344,6 @@ namespace auto_scan_crack
         }
 
         // ===== MSNV =====
-
-        private void TxtMsnv_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key != Key.Enter) return;
-            e.Handled = true;
-            SaveText(MsnvFile, txtMsnv.Text, "MSNV");
-            txtPO.Focus();  // nhập xong MSNV → chuyển sang ô quét PO
-        }
-
-        private void TxtMsnv_LostFocus(object sender, RoutedEventArgs e) => SaveText(MsnvFile, txtMsnv.Text, "MSNV");
 
         private string LoadText(string file, string name)
         {
@@ -330,9 +377,21 @@ namespace auto_scan_crack
         {
             switch (e.Key)
             {
-                case Key.F2:            // đưa con trỏ về ô quét PO
+                case Key.Enter:         // kết thúc 1 mã (máy quét luôn gửi Enter ở cuối)
+                    SubmitScanBuffer();
+                    e.Handled = true;
+                    break;
+                case Key.Back:          // xóa 1 ký tự vừa gõ
+                    if (_scanBuffer.Length > 0) _scanBuffer.Length--;
+                    ShowScanBuffer();
+                    e.Handled = true;
+                    break;
+                case Key.Escape:        // bỏ mã đang gõ dở
+                    ClearScanBuffer();
+                    e.Handled = true;
+                    break;
+                case Key.F2:            // đưa con trỏ về ô quét mã
                     txtPO.Focus();
-                    txtPO.SelectAll();
                     e.Handled = true;
                     break;
                 case Key.F5:
@@ -352,6 +411,24 @@ namespace auto_scan_crack
         private void BtnHome_Click(object sender, RoutedEventArgs e) => webView.CoreWebView2?.Navigate(HomeUrl);
 
         private void SetStatus(string text) => lblStatus.Text = text;
+
+        private AlertWindow? _info;
+
+        /// <summary>Thông báo màu xanh toàn màn hình, tự đóng sau vài giây.</summary>
+        private void ShowInfo(string title, string message, int seconds)
+        {
+            _info?.Close();
+            var info = new AlertWindow(title, message, seconds, "#2E7D32");
+            info.Closed += (_, _) =>
+            {
+                if (_info == info) _info = null;
+                Activate();
+                if (_busy) webView.Focus();   // đang tự động → trả focus cho trang web
+                else txtPO.Focus();
+            };
+            _info = info;
+            info.Show();
+        }
 
         private AlertWindow? _alert;
 

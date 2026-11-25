@@ -35,6 +35,12 @@ namespace auto_scan_crack
         /// <summary>Chữ cần có trong tiêu đề để biết đã sang trang nhập nhân viên.</summary>
         public const string OperatorEntryTitle = "Operator entry";
 
+        /// <summary>Tiêu đề trang Login (làm đầy đủ các bước).</summary>
+        public const string LoginTitle = "Login";
+
+        /// <summary>Tiêu đề trang PO entry (đã đăng nhập → chỉ làm từ bước nhập MSNV).</summary>
+        public const string PoEntryTitle = "PO entry";
+
         /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
         public const string OperatorInputSelector = "#txtOperatorID";
 
@@ -63,17 +69,17 @@ namespace auto_scan_crack
             };
             """;
 
-        public const int ScanLength = 12;
-
         /// <summary>
-        /// Script chèn vào mọi trang: bắt chuỗi do máy quét gõ (gõ rất nhanh, đủ 12 ký tự, kết thúc bằng Enter)
-        /// khi con trỏ đang nằm trong trang web, rồi báo về app.
+        /// Script chèn vào mọi trang: bắt chuỗi do máy quét gõ (gõ rất nhanh, kết thúc bằng Enter)
+        /// khi con trỏ đang nằm trong trang web. Chỉ bắt 3 loại mã app hiểu (xem ScanClassifier):
+        /// mã máy "TRTB…", MSNV 4–5 chữ số, PO 12 chữ số → báo về app. Mã khác để trang tự xử lý.
         /// </summary>
-        public static readonly string ScanHookScript = $$"""
+        public static readonly string ScanHookScript = """
             (() => {
               if (window.__autoScanHook) return;
               window.__autoScanHook = true;
-              const LEN = {{ScanLength}}, MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
+              const MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
+              const KNOWN = /^(TRTB.+|\d{4,5}|\d{12})$/i;
               let buf = '', last = 0;
               window.addEventListener('keydown', e => {
                 if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
@@ -81,7 +87,7 @@ namespace auto_scan_crack
                 if (now - last > MAX_GAP_MS) buf = '';
                 last = now;
                 if (e.key === 'Enter') {
-                  if (buf.length === LEN) {
+                  if (buf.length > 1 && KNOWN.test(buf)) {
                     e.preventDefault();               // không để Enter của máy quét submit form
                     e.stopImmediatePropagation();
                     window.chrome.webview.postMessage(JSON.stringify({ type: 'scan', code: buf }));
@@ -104,17 +110,56 @@ namespace auto_scan_crack
         }
 
         /// <summary>
-        /// Trên trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
-        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, sau đó nhấn #btnLogin;
-        /// chờ tối đa 30s cho #lblTitle chứa "Operator entry", rồi nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter;
-        /// chờ tối đa 30s cho #lblPO hiện ra, nhấn vào, nhập số PO và nhấn Enter.
+        /// Chạy tự động theo trang đang mở (xem tiêu đề trang):
+        /// - "Login": làm đầy đủ — đăng nhập (Terminal ID, Shift, Login) → nhập MSNV → nhập PO.
+        /// - "PO entry": đã đăng nhập và đã có MSNV → chỉ nhập PO.
+        /// - "Operator entry": đã đăng nhập → nhập MSNV → nhập PO.
+        /// - Trang khác: không làm gì, trả về lỗi.
         /// Trả về null nếu thành công, ngược lại trả về thông báo lỗi.
         /// </summary>
-        public async Task<string?> FillLoginAsync(string terminalId, string msnv, string po, string shift = "1S")
+        public async Task<string?> RunAsync(string terminalId, string msnv, string po, string shift = "1S")
         {
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
 
+            var title = (await GetPageTitleAsync()).ToLowerInvariant();
+
+            if (title.Contains(PoEntryTitle.ToLowerInvariant()))
+                return await EnterPoAsync(po, "trang PO entry chưa hiện nhãn PO");
+
+            if (title.Contains(OperatorEntryTitle.ToLowerInvariant()))
+                return await EnterOperatorAndPoAsync(msnv, po);
+
+            if (title.Contains(LoginTitle.ToLowerInvariant()))
+            {
+                var loginError = await LoginAsync(terminalId, shift);
+                if (loginError is not null)
+                    return loginError;
+                return await EnterOperatorAndPoAsync(msnv, po);
+            }
+
+            return $"Trang hiện tại có tiêu đề \"{title}\" — không phải \"{LoginTitle}\" hay \"{PoEntryTitle}\" nên không tự động.";
+        }
+
+        /// <summary>Tiêu đề trang: #lblTitle (các trang sau Login) hoặc .titleCommon (trang Login không có #lblTitle).</summary>
+        private async Task<string> GetPageTitleAsync()
+        {
+            var res = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(TitleSelector)}}) || document.querySelector('.titleCommon');
+                  return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+                })()
+                """);
+            return res?.ValueKind == JsonValueKind.String ? res.Value.GetString() ?? "" : "";
+        }
+
+        /// <summary>
+        /// Trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
+        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, nhấn #btnLogin,
+        /// rồi chờ tối đa 30s cho #lblTitle chứa "Operator entry".
+        /// </summary>
+        private async Task<string?> LoginAsync(string terminalId, string shift)
+        {
             // 1) Click vào label #MyVersion
             var label = await EvalAsync($$"""
                 (() => {
@@ -154,12 +199,7 @@ namespace auto_scan_crack
 
             // Mã máy dạng barcode "TRTB23333": trang đã tự thêm tiền tố "TR" vào keyBuffer khi focus ô,
             // nên chỉ gõ phần sau "TR" (TB23333), tránh thành "TRTRTB23333".
-            foreach (var c in StripTerminalPrefix(terminalId))
-                await TypeCharAsync(c);
-
-            // Điền mã máy xong → nhấn Enter (như phím Enter thật)
-            await Task.Delay(100);
-            await PressEnterAsync();
+            await TypeAndEnterAsync(StripTerminalPrefix(terminalId));
             await Task.Delay(3000);
 
             // 4) Chờ postback của Terminal ID xong
@@ -199,6 +239,14 @@ namespace auto_scan_crack
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang Operator entry chưa tải xong.";
 
+            return null;
+        }
+
+        /// <summary>
+        /// Đã đăng nhập: nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter, rồi nhập PO (EnterPoAsync).
+        /// </summary>
+        private async Task<string?> EnterOperatorAndPoAsync(string msnv, string po)
+        {
             // 9) Nhấn vào ô #txtOperatorID rồi nhập MSNV
             var op = await EvalAsync($$"""
                 (() => {
@@ -227,36 +275,28 @@ namespace auto_scan_crack
             if (ready?.ValueKind != JsonValueKind.True)
                 return "Không đưa được con trỏ vào ô MSNV (" + OperatorInputSelector + ").";
 
-            foreach (var c in msnv)
-                await TypeCharAsync(c);
+            // Gõ MSNV rồi nhấn Enter
+            await TypeAndEnterAsync(msnv);
 
-            // Gõ MSNV xong → nhấn Enter (như phím Enter thật)
-            await Task.Delay(100);
-            await PressEnterAsync();
-
-            // 10) MSNV hợp lệ thì trang hiện #lblPO (chờ tối đa 30s) → nhấn vào rồi nhập số PO vừa quét
+            // 10) MSNV hợp lệ thì trang hiện #lblPO → nhập PO
             await Task.Delay(500);
+            return await EnterPoAsync(po, $"có thể MSNV \"{msnv}\" không hợp lệ");
+        }
+
+        /// <summary>
+        /// Chờ tối đa 30s cho #lblPO hiện ra, nhấn vào, nhập số PO và nhấn Enter.
+        /// <paramref name="missingHint"/>: gợi ý nguyên nhân khi không thấy #lblPO.
+        /// </summary>
+        private async Task<string?> EnterPoAsync(string po, string missingHint)
+        {
             var lblPo = await WaitVisibleAsync(PoLabelSelector, TimeSpan.FromSeconds(30));
             if (lblPo is not { } pp)
-                return $"Sau 30 giây không thấy {PoLabelSelector} (có thể MSNV \"{msnv}\" không hợp lệ) nên chưa nhập PO.";
+                return $"Sau 30 giây không thấy {PoLabelSelector} ({missingHint}) nên chưa nhập PO.";
             await ClickAsync(pp.x, pp.y);
             await Task.Delay(300);
 
-            // App tự gõ 12 ký tự PO rất nhanh → tạm tắt bộ bắt mã quét để không nhận nhầm là người dùng quét PO mới
-            await SetScanHookPausedAsync(true);
-            try
-            {
-                foreach (var c in po)
-                    await TypeCharAsync(c);
-
-                // Gõ PO xong → nhấn Enter (vẫn trong lúc tạm tắt bộ bắt mã quét để Enter đi thẳng vào trang)
-                await Task.Delay(100);
-                await PressEnterAsync();
-            }
-            finally
-            {
-                await SetScanHookPausedAsync(false);
-            }
+            // Gõ PO rồi nhấn Enter
+            await TypeAndEnterAsync(po);
 
             return null;
         }
@@ -284,6 +324,27 @@ namespace auto_scan_crack
                 await Task.Delay(200);
             }
             return null;
+        }
+
+        /// <summary>
+        /// Gõ chuỗi như bàn phím thật rồi nhấn Enter.
+        /// App gõ rất nhanh giống máy quét → tạm tắt bộ bắt mã quét trong lúc gõ để không bị nhận nhầm là người dùng quét,
+        /// và để Enter đi thẳng vào trang.
+        /// </summary>
+        private async Task TypeAndEnterAsync(string text)
+        {
+            await SetScanHookPausedAsync(true);
+            try
+            {
+                foreach (var c in text)
+                    await TypeCharAsync(c);
+                await Task.Delay(100);
+                await PressEnterAsync();
+            }
+            finally
+            {
+                await SetScanHookPausedAsync(false);
+            }
         }
 
         private Task SetScanHookPausedAsync(bool paused) =>
