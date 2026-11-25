@@ -152,7 +152,9 @@ namespace auto_scan_crack
             if (focused?.ValueKind != JsonValueKind.True)
                 return "Không đưa được con trỏ vào ô TerminalID (" + TerminalInputSelector + ").";
 
-            foreach (var c in terminalId)
+            // Mã máy dạng barcode "TRTB23333": trang đã tự thêm tiền tố "TR" vào keyBuffer khi focus ô,
+            // nên chỉ gõ phần sau "TR" (TB23333), tránh thành "TRTRTB23333".
+            foreach (var c in StripTerminalPrefix(terminalId))
                 await TypeCharAsync(c);
 
             // Điền mã máy xong → nhấn Enter (như phím Enter thật)
@@ -576,6 +578,13 @@ namespace auto_scan_crack
             {
                 return null;
             }
+        }
+
+        /// <summary>Bỏ tiền tố "TR" (mã barcode Terminal) ở đầu mã máy: "TRTB23333" → "TB23333".</summary>
+        public static string StripTerminalPrefix(string terminalId)
+        {
+            var id = terminalId.Trim();
+            return id.StartsWith("TR", StringComparison.OrdinalIgnoreCase) && id.Length > 2 ? id[2..] : id;
         }
 
         /// <summary>Chuyển chuỗi C# thành chuỗi JS an toàn (có dấu nháy).</summary>
