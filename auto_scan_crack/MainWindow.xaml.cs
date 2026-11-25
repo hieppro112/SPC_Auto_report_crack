@@ -110,7 +110,8 @@ namespace auto_scan_crack
 
             if (code.Length != WebAutomation.ScanLength)
             {
-                SetStatus($"Mã \"{code}\" có {code.Length} ký tự — mã PO phải đúng {WebAutomation.ScanLength} ký tự.");
+                ShowError("MÃ PO KHÔNG HỢP LỆ",
+                    $"Mã \"{code}\" có {code.Length} ký tự — mã PO phải đúng {WebAutomation.ScanLength} ký tự.", txtPO);
                 return;
             }
             _ = HandlePoScannedAsync(code);
@@ -144,20 +145,18 @@ namespace auto_scan_crack
             var terminalId = txtTerminalId.Text.Trim();
             if (terminalId.Length == 0)
             {
-                SetStatus("Chưa nhập Terminal ID. Vui lòng nhập Terminal ID trước khi quét PO.");
-                txtTerminalId.Focus();
+                ShowError("CHƯA NHẬP TERMINAL ID", "Vui lòng nhập Terminal ID trước khi quét PO.", txtTerminalId);
                 return;
             }
             var msnv = txtMsnv.Text.Trim();
             if (msnv.Length == 0)
             {
-                SetStatus("Chưa nhập MSNV. Vui lòng nhập MSNV trước khi quét PO.");
-                txtMsnv.Focus();
+                ShowError("CHƯA NHẬP MSNV", "Vui lòng nhập MSNV trước khi quét PO.", txtMsnv);
                 return;
             }
             if (_automation is null)
             {
-                SetStatus("Trình duyệt chưa sẵn sàng.");
+                ShowError("TRÌNH DUYỆT CHƯA SẴN SÀNG", "Vui lòng chờ trang web tải xong rồi quét lại PO.", txtPO);
                 return;
             }
             if (_busy) return;
@@ -169,13 +168,14 @@ namespace auto_scan_crack
             {
                 webView.Focus();   // để phím gõ tự động đi vào trang web
                 var error = await _automation.FillLoginAsync(terminalId, msnv, po);
-                SetStatus(error is null
-                    ? $"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})"
-                    : $"PO: {po} | Lỗi tự động: {error}");
+                if (error is null)
+                    SetStatus($"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})");
+                else
+                    ShowError("LỖI TỰ ĐỘNG", $"PO: {po}\n{error}");
             }
             catch (Exception ex)
             {
-                SetStatus($"PO: {po} | Lỗi tự động: {ex.Message}");
+                ShowError("LỖI TỰ ĐỘNG", $"PO: {po}\n{ex.Message}");
             }
             finally
             {
@@ -287,5 +287,28 @@ namespace auto_scan_crack
         private void BtnHome_Click(object sender, RoutedEventArgs e) => webView.CoreWebView2?.Navigate(HomeUrl);
 
         private void SetStatus(string text) => lblStatus.Text = text;
+
+        private AlertWindow? _alert;
+
+        /// <summary>
+        /// Báo lỗi: ghi lên thanh trạng thái và hiện cảnh báo toàn màn hình
+        /// (đóng khi người dùng bấm ĐÓNG / Esc / Enter, hoặc tự đóng sau 5 giây).
+        /// Đóng xong thì đưa con trỏ về ô <paramref name="focusAfter"/> nếu có.
+        /// </summary>
+        private void ShowError(string title, string message, IInputElement? focusAfter = null)
+        {
+            SetStatus($"{title}: {message.Replace('\n', ' ')}  ({DateTime.Now:HH:mm:ss})");
+
+            _alert?.Close();   // chỉ giữ 1 cảnh báo mới nhất
+            var alert = new AlertWindow(title, message) { Owner = this };
+            alert.Closed += (_, _) =>
+            {
+                if (_alert == alert) _alert = null;
+                Activate();
+                focusAfter?.Focus();
+            };
+            _alert = alert;
+            alert.Show();
+        }
     }
 }
