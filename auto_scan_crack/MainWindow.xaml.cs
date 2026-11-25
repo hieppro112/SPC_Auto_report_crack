@@ -38,6 +38,7 @@ namespace auto_scan_crack
         {
             LoadTerminalId();
             txtMsnv.Text = LoadText(MsnvFile, "MSNV");
+            InitPoTimer();
             // Ô nào còn trống thì đưa con trỏ vào ô đó trước, đủ rồi thì vào ô PO
             if (string.IsNullOrWhiteSpace(txtTerminalId.Text)) txtTerminalId.Focus();
             else if (string.IsNullOrWhiteSpace(txtMsnv.Text)) txtMsnv.Focus();
@@ -164,6 +165,10 @@ namespace auto_scan_crack
 
             _busy = true;
             lblCurrentPO.Text = po;
+
+            // Lấy GOODCNT và bắt đầu đếm giờ cho PO (chạy song song với phần tự động trên web)
+            _ = StartPoTimerAsync(po, DateTime.Now);
+
             SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login, nhập MSNV và PO...");
             try
             {
@@ -360,7 +365,8 @@ namespace auto_scan_crack
             SetStatus($"{title}: {message.Replace('\n', ' ')}  ({DateTime.Now:HH:mm:ss})");
 
             _alert?.Close();   // chỉ giữ 1 cảnh báo mới nhất
-            var alert = new AlertWindow(title, message) { Owner = this };
+            // Không đặt Owner: nếu cửa sổ chính bị thu nhỏ thì cảnh báo vẫn hiện
+            var alert = new AlertWindow(title, message);
             alert.Closed += (_, _) =>
             {
                 if (_alert == alert) _alert = null;
