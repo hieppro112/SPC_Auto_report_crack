@@ -23,6 +23,12 @@ namespace auto_scan_crack
         /// <summary>Chữ hiển thị giá trị Shift đang chọn.</summary>
         public const string ShiftSelectedSelector = "#ddlShiftCD_lblMenuSelect";
 
+        /// <summary>Ô AttendanceDate (server tự điền sau khi chọn Shift).</summary>
+        public const string DutyDateSelector = "#txtDutyYmd";
+
+        /// <summary>Nút Login.</summary>
+        public const string LoginButtonSelector = "#btnLogin";
+
         /// <summary>Tiền tố id của combobox Shift (các ô ẩn: _SelVal, _hidSelKeys, _hidSelItems, _btnListSelect).</summary>
         public const string ShiftPrefix = "ddlShiftCD";
 
@@ -86,7 +92,7 @@ namespace auto_scan_crack
 
         /// <summary>
         /// Trên trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
-        /// chờ danh sách Shift nạp xong rồi mở combobox và chọn SF1.
+        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, sau đó nhấn #btnLogin.
         /// Trả về null nếu thành công, ngược lại trả về thông báo lỗi.
         /// </summary>
         public async Task<string?> FillLoginAsync(string terminalId, string shift = "1S")
@@ -143,7 +149,58 @@ namespace auto_scan_crack
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(15)))
                 return "Trang web chưa xử lý xong Terminal ID.";
 
-            // 5) Giống thao tác tay: mở combobox Shift (▼) rồi chạm vào dòng SF1.
+            // 5) Chọn Shift
+            var shiftError = await SelectShiftAsync(shift);
+            if (shiftError is not null)
+                return shiftError;
+
+            // 6) Chọn xong chờ 1s, rồi chờ tối đa 30s cho ô AttendanceDate (#txtDutyYmd) có dữ liệu
+            await Task.Delay(1000);
+            if (!await WaitDutyDateAsync(TimeSpan.FromSeconds(30)))
+                return "Sau 30 giây ô AttendanceDate (" + DutyDateSelector + ") vẫn trống nên chưa nhấn Login.";
+
+            // 7) Có ngày rồi → nhấn nút Login
+            if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
+                return "Trang web chưa xử lý xong Shift nên chưa nhấn Login.";
+            var login = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(LoginButtonSelector)}});
+                  if (!el || el.disabled) return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """);
+            if (login is not { ValueKind: JsonValueKind.Object } lg)
+                return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
+            await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
+
+            return null;
+        }
+
+        /// <summary>Chờ đến khi ô AttendanceDate (#txtDutyYmd) có dữ liệu (khác rỗng).</summary>
+        private async Task<bool> WaitDutyDateAsync(TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(DutyDateSelector)}});
+                  return !!el && el.value.trim() !== '';
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
+        }
+
+        /// <summary>Mở combobox Shift (▼) và chọn dòng cần chọn. Trả về null nếu thành công, ngược lại là thông báo lỗi.</summary>
+        private async Task<string?> SelectShiftAsync(string shift)
+        {
+            // Giống thao tác tay: mở combobox Shift (▼) rồi chạm vào dòng SF1.
             //    Combobox này làm cho màn hình cảm ứng (ddlTouch.js): click chuột sẽ ẩn danh sách trước khi kịp chọn,
             //    nên dòng SF1 được chọn bằng sự kiện chạm (touch).
             for (int attempt = 1; attempt <= 5; attempt++)
