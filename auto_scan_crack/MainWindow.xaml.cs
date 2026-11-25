@@ -126,7 +126,7 @@ namespace auto_scan_crack
         }
 
         /// <summary>
-        /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift = SF1.
+        /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift, chờ AttendanceDate rồi nhấn Login.
         /// </summary>
         private async Task HandlePoScannedAsync(string po)
         {
@@ -149,13 +149,13 @@ namespace auto_scan_crack
 
             _busy = true;
             lblCurrentPO.Text = po;
-            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID và chọn Shift...");
+            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift và Login...");
             try
             {
                 webView.Focus();   // để phím gõ tự động đi vào trang web
                 var error = await _automation.FillLoginAsync(terminalId);
                 SetStatus(error is null
-                    ? $"PO: {po} | Đã điền Terminal ID \"{terminalId}\" và chọn Shift SF1  ({DateTime.Now:HH:mm:ss})"
+                    ? $"PO: {po} | Đã điền Terminal ID \"{terminalId}\", chọn Shift và nhấn Login  ({DateTime.Now:HH:mm:ss})"
                     : $"PO: {po} | Lỗi tự động: {error}");
             }
             catch (Exception ex)
