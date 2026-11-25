@@ -135,7 +135,8 @@ namespace auto_scan_crack
 
         /// <summary>
         /// Quét xong 1 mã PO (12 ký tự): xóa ô TerminalID trên web, gõ Terminal ID, chọn Shift, chờ AttendanceDate rồi nhấn Login,
-        /// chờ trang Operator entry rồi nhập MSNV, chờ #lblPO rồi nhập số PO.
+        /// chờ trang Operator entry rồi nhập MSNV, chờ #lblPO rồi nhập số PO;
+        /// cuối cùng chờ 10s rồi nhập PO vào WorkSupportSystem (chưa mở thì báo lỗi).
         /// </summary>
         private async Task HandlePoScannedAsync(string po)
         {
@@ -169,7 +170,10 @@ namespace auto_scan_crack
                 webView.Focus();   // để phím gõ tự động đi vào trang web
                 var error = await _automation.FillLoginAsync(terminalId, msnv, po);
                 if (error is null)
+                {
                     SetStatus($"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})");
+                    await SendPoToWorkSupportAsync(po);
+                }
                 else
                     ShowError("LỖI TỰ ĐỘNG", $"PO: {po}\n{error}");
             }
@@ -181,6 +185,62 @@ namespace auto_scan_crack
             {
                 _busy = false;
             }
+        }
+
+        // ===== WorkSupportSystem =====
+
+        private const int WorkSupportDelaySeconds = 10;
+
+        /// <summary>
+        /// Web xong → nhập PO vào WorkSupportSystem: đang mở thì chờ 10s, đưa cửa sổ lên trước, gõ PO + Enter;
+        /// chưa mở thì hiện cảnh báo yêu cầu người dùng mở.
+        /// </summary>
+        private async Task SendPoToWorkSupportAsync(string po)
+        {
+            if (WorkSupportApp.FindRunning() is null)
+            {
+                ShowError("CHƯA MỞ WORKSUPPORTSYSTEM",
+                    $"Vui lòng mở WorkSupportSystem (加工支援システム) rồi nhập PO {po}.", txtPO);
+                return;
+            }
+
+            for (int s = WorkSupportDelaySeconds; s > 0; s--)
+            {
+                SetStatus($"PO: {po} | Sẽ nhập PO vào WorkSupportSystem sau {s} giây...");
+                await Task.Delay(1000);
+            }
+
+            // Kiểm tra lại: trong 10s người dùng có thể đã tắt app
+            using var process = WorkSupportApp.FindRunning();
+            if (process is null)
+            {
+                ShowError("CHƯA MỞ WORKSUPPORTSYSTEM",
+                    $"WorkSupportSystem đã bị tắt. Vui lòng mở lại rồi nhập PO {po}.", txtPO);
+                return;
+            }
+
+            var hwnd = WorkSupportApp.FindMainWindow(process);
+            if (hwnd == IntPtr.Zero)
+            {
+                ShowError("KHÔNG TÌM THẤY CỬA SỔ WORKSUPPORTSYSTEM",
+                    $"WorkSupportSystem đang chạy nhưng không có cửa sổ. Vui lòng mở cửa sổ rồi nhập PO {po}.", txtPO);
+                return;
+            }
+
+            // Chỉ gõ khi chắc chắn WorkSupportSystem đang nhận bàn phím, tránh gõ nhầm vào app khác
+            if (!WorkSupportApp.BringToFront(hwnd, process.Id))
+            {
+                ShowError("KHÔNG ĐƯA ĐƯỢC WORKSUPPORTSYSTEM LÊN TRƯỚC",
+                    $"Vui lòng bấm vào cửa sổ WorkSupportSystem rồi nhập PO {po}.", txtPO);
+                return;
+            }
+
+            await Task.Delay(300);
+            await WorkSupportApp.TypeTextAsync(po);
+            await Task.Delay(100);
+            WorkSupportApp.PressEnter();
+
+            SetStatus($"PO: {po} | Đã nhập PO vào WorkSupportSystem  ({DateTime.Now:HH:mm:ss})");
         }
 
         // ===== Terminal ID =====
