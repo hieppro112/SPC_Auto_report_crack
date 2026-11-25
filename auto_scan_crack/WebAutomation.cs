@@ -23,6 +23,30 @@ namespace auto_scan_crack
         /// <summary>Chữ hiển thị giá trị Shift đang chọn.</summary>
         public const string ShiftSelectedSelector = "#ddlShiftCD_lblMenuSelect";
 
+        /// <summary>Ô AttendanceDate (server tự điền sau khi chọn Shift).</summary>
+        public const string DutyDateSelector = "#txtDutyYmd";
+
+        /// <summary>Nút Login.</summary>
+        public const string LoginButtonSelector = "#btnLogin";
+
+        /// <summary>Tiêu đề trang sau khi Login.</summary>
+        public const string TitleSelector = "#lblTitle";
+
+        /// <summary>Chữ cần có trong tiêu đề để biết đã sang trang nhập nhân viên.</summary>
+        public const string OperatorEntryTitle = "Operator entry";
+
+        /// <summary>Tiêu đề trang Login (làm đầy đủ các bước).</summary>
+        public const string LoginTitle = "Login";
+
+        /// <summary>Tiêu đề trang PO entry (đã đăng nhập → chỉ làm từ bước nhập MSNV).</summary>
+        public const string PoEntryTitle = "PO entry";
+
+        /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
+        public const string OperatorInputSelector = "#txtOperatorID";
+
+        /// <summary>Nhãn PO hiện ra sau khi nhập MSNV thành công.</summary>
+        public const string PoLabelSelector = "#lblPO";
+
         /// <summary>Tiền tố id của combobox Shift (các ô ẩn: _SelVal, _hidSelKeys, _hidSelItems, _btnListSelect).</summary>
         public const string ShiftPrefix = "ddlShiftCD";
 
@@ -45,24 +69,25 @@ namespace auto_scan_crack
             };
             """;
 
-        public const int ScanLength = 12;
-
         /// <summary>
-        /// Script chèn vào mọi trang: bắt chuỗi do máy quét gõ (gõ rất nhanh, đủ 12 ký tự, kết thúc bằng Enter)
-        /// khi con trỏ đang nằm trong trang web, rồi báo về app.
+        /// Script chèn vào mọi trang: bắt chuỗi do máy quét gõ (gõ rất nhanh, kết thúc bằng Enter)
+        /// khi con trỏ đang nằm trong trang web. Chỉ bắt 3 loại mã app hiểu (xem ScanClassifier):
+        /// mã máy "TRTB…", MSNV 4–5 chữ số, PO 12 chữ số → báo về app. Mã khác để trang tự xử lý.
         /// </summary>
-        public static readonly string ScanHookScript = $$"""
+        public static readonly string ScanHookScript = """
             (() => {
               if (window.__autoScanHook) return;
               window.__autoScanHook = true;
-              const LEN = {{ScanLength}}, MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
+              const MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
+              const KNOWN = /^(TRTB.+|\d{4,5}|\d{12})$/i;
               let buf = '', last = 0;
               window.addEventListener('keydown', e => {
+                if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
                 const now = performance.now();
                 if (now - last > MAX_GAP_MS) buf = '';
                 last = now;
                 if (e.key === 'Enter') {
-                  if (buf.length === LEN) {
+                  if (buf.length > 1 && KNOWN.test(buf)) {
                     e.preventDefault();               // không để Enter của máy quét submit form
                     e.stopImmediatePropagation();
                     window.chrome.webview.postMessage(JSON.stringify({ type: 'scan', code: buf }));
@@ -85,15 +110,56 @@ namespace auto_scan_crack
         }
 
         /// <summary>
-        /// Trên trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
-        /// chờ danh sách Shift nạp xong rồi mở combobox và chọn SF1.
+        /// Chạy tự động theo trang đang mở (xem tiêu đề trang):
+        /// - "Login": làm đầy đủ — đăng nhập (Terminal ID, Shift, Login) → nhập MSNV → nhập PO.
+        /// - "PO entry": đã đăng nhập và đã có MSNV → chỉ nhập PO.
+        /// - "Operator entry": đã đăng nhập → nhập MSNV → nhập PO.
+        /// - Trang khác: không làm gì, trả về lỗi.
         /// Trả về null nếu thành công, ngược lại trả về thông báo lỗi.
         /// </summary>
-        public async Task<string?> FillLoginAsync(string terminalId, string shift = "1S")
+        public async Task<string?> RunAsync(string terminalId, string msnv, string po, string shift = "1S")
         {
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
 
+            var title = (await GetPageTitleAsync()).ToLowerInvariant();
+
+            if (title.Contains(PoEntryTitle.ToLowerInvariant()))
+                return await EnterPoAsync(po, "trang PO entry chưa hiện nhãn PO");
+
+            if (title.Contains(OperatorEntryTitle.ToLowerInvariant()))
+                return await EnterOperatorAndPoAsync(msnv, po);
+
+            if (title.Contains(LoginTitle.ToLowerInvariant()))
+            {
+                var loginError = await LoginAsync(terminalId, shift);
+                if (loginError is not null)
+                    return loginError;
+                return await EnterOperatorAndPoAsync(msnv, po);
+            }
+
+            return $"Trang hiện tại có tiêu đề \"{title}\" — không phải \"{LoginTitle}\" hay \"{PoEntryTitle}\" nên không tự động.";
+        }
+
+        /// <summary>Tiêu đề trang: #lblTitle (các trang sau Login) hoặc .titleCommon (trang Login không có #lblTitle).</summary>
+        private async Task<string> GetPageTitleAsync()
+        {
+            var res = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(TitleSelector)}}) || document.querySelector('.titleCommon');
+                  return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+                })()
+                """);
+            return res?.ValueKind == JsonValueKind.String ? res.Value.GetString() ?? "" : "";
+        }
+
+        /// <summary>
+        /// Trang Login: click #MyVersion, chờ 1s, nhấn Backspace 1 lần, nhập Terminal ID (Enter để trang xác nhận),
+        /// mở combobox và chọn Shift, chờ 1s rồi chờ tối đa 30s cho #txtDutyYmd có dữ liệu, nhấn #btnLogin,
+        /// rồi chờ tối đa 30s cho #lblTitle chứa "Operator entry".
+        /// </summary>
+        private async Task<string?> LoginAsync(string terminalId, string shift)
+        {
             // 1) Click vào label #MyVersion
             var label = await EvalAsync($$"""
                 (() => {
@@ -131,19 +197,201 @@ namespace auto_scan_crack
             if (focused?.ValueKind != JsonValueKind.True)
                 return "Không đưa được con trỏ vào ô TerminalID (" + TerminalInputSelector + ").";
 
-            foreach (var c in terminalId)
-                await TypeCharAsync(c);
-
-            // Điền mã máy xong → nhấn Enter (như phím Enter thật)
-            await Task.Delay(100);
-            await PressEnterAsync();
+            // Mã máy dạng barcode "TRTB23333": trang đã tự thêm tiền tố "TR" vào keyBuffer khi focus ô,
+            // nên chỉ gõ phần sau "TR" (TB23333), tránh thành "TRTRTB23333".
+            await TypeAndEnterAsync(StripTerminalPrefix(terminalId));
             await Task.Delay(3000);
 
             // 4) Chờ postback của Terminal ID xong
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(15)))
                 return "Trang web chưa xử lý xong Terminal ID.";
 
-            // 5) Giống thao tác tay: mở combobox Shift (▼) rồi chạm vào dòng SF1.
+            // 5) Chọn Shift
+            var shiftError = await SelectShiftAsync(shift);
+            if (shiftError is not null)
+                return shiftError;
+
+            // 6) Chọn xong chờ 1s, rồi chờ tối đa 30s cho ô AttendanceDate (#txtDutyYmd) có dữ liệu
+            await Task.Delay(1000);
+            if (!await WaitDutyDateAsync(TimeSpan.FromSeconds(30)))
+                return "Sau 30 giây ô AttendanceDate (" + DutyDateSelector + ") vẫn trống nên chưa nhấn Login.";
+
+            // 7) Có ngày rồi → nhấn nút Login
+            if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
+                return "Trang web chưa xử lý xong Shift nên chưa nhấn Login.";
+            var login = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(LoginButtonSelector)}});
+                  if (!el || el.disabled) return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """);
+            if (login is not { ValueKind: JsonValueKind.Object } lg)
+                return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
+            await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
+
+            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry"
+            await Task.Delay(500);
+            if (!await WaitTitleAsync(OperatorEntryTitle, TimeSpan.FromSeconds(30)))
+                return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
+                return "Trang Operator entry chưa tải xong.";
+
+            return null;
+        }
+
+        /// <summary>
+        /// Đã đăng nhập: nhấn vào #txtOperatorID, nhập MSNV và nhấn Enter, rồi nhập PO (EnterPoAsync).
+        /// </summary>
+        private async Task<string?> EnterOperatorAndPoAsync(string msnv, string po)
+        {
+            // 9) Nhấn vào ô #txtOperatorID rồi nhập MSNV
+            var op = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(OperatorInputSelector)}});
+                  if (!el || el.disabled) return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """);
+            if (op is not { ValueKind: JsonValueKind.Object } o)
+                return "Không tìm thấy ô nhập MSNV (" + OperatorInputSelector + ").";
+            await ClickAsync(o.GetProperty("x").GetDouble(), o.GetProperty("y").GetDouble());
+            await Task.Delay(200);
+
+            // Đảm bảo con trỏ đang ở ô MSNV; nếu ô có sẵn chữ thì bôi đen để gõ đè lên
+            var ready = await EvalAsync($$"""
+                (() => {
+                  const el = document.querySelector({{Js(OperatorInputSelector)}});
+                  if (!el) return false;
+                  if (document.activeElement !== el) el.focus();
+                  el.select();
+                  return document.activeElement === el;
+                })()
+                """);
+            if (ready?.ValueKind != JsonValueKind.True)
+                return "Không đưa được con trỏ vào ô MSNV (" + OperatorInputSelector + ").";
+
+            // Gõ MSNV rồi nhấn Enter
+            await TypeAndEnterAsync(msnv);
+
+            // 10) MSNV hợp lệ thì trang hiện #lblPO → nhập PO
+            await Task.Delay(500);
+            return await EnterPoAsync(po, $"có thể MSNV \"{msnv}\" không hợp lệ");
+        }
+
+        /// <summary>
+        /// Chờ tối đa 30s cho #lblPO hiện ra, nhấn vào, nhập số PO và nhấn Enter.
+        /// <paramref name="missingHint"/>: gợi ý nguyên nhân khi không thấy #lblPO.
+        /// </summary>
+        private async Task<string?> EnterPoAsync(string po, string missingHint)
+        {
+            var lblPo = await WaitVisibleAsync(PoLabelSelector, TimeSpan.FromSeconds(30));
+            if (lblPo is not { } pp)
+                return $"Sau 30 giây không thấy {PoLabelSelector} ({missingHint}) nên chưa nhập PO.";
+            await ClickAsync(pp.x, pp.y);
+            await Task.Delay(300);
+
+            // Gõ PO rồi nhấn Enter
+            await TypeAndEnterAsync(po);
+
+            return null;
+        }
+
+        /// <summary>Chờ phần tử hiện ra trên trang; trả về tọa độ tâm của nó.</summary>
+        private async Task<(double x, double y)?> WaitVisibleAsync(string selector, TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(selector)}});
+                  if (!el) return null;
+                  const s = getComputedStyle(el);
+                  if (s.display === 'none' || s.visibility === 'hidden') return null;
+                  el.scrollIntoView({ block: 'center' });
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) return null;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && await EvalAsync(script) is { ValueKind: JsonValueKind.Object } r)
+                    return (r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble());
+                await Task.Delay(200);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Gõ chuỗi như bàn phím thật rồi nhấn Enter.
+        /// App gõ rất nhanh giống máy quét → tạm tắt bộ bắt mã quét trong lúc gõ để không bị nhận nhầm là người dùng quét,
+        /// và để Enter đi thẳng vào trang.
+        /// </summary>
+        private async Task TypeAndEnterAsync(string text)
+        {
+            await SetScanHookPausedAsync(true);
+            try
+            {
+                foreach (var c in text)
+                    await TypeCharAsync(c);
+                await Task.Delay(100);
+                await PressEnterAsync();
+            }
+            finally
+            {
+                await SetScanHookPausedAsync(false);
+            }
+        }
+
+        private Task SetScanHookPausedAsync(bool paused) =>
+            EvalAsync($"window.__autoScanPaused = {(paused ? "true" : "false")};");
+
+        /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
+        private async Task<bool> WaitTitleAsync(string text, TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(TitleSelector)}});
+                  return !!el && el.textContent.toLowerCase().includes({{Js(text.ToLowerInvariant())}});
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
+        }
+
+        /// <summary>Chờ đến khi ô AttendanceDate (#txtDutyYmd) có dữ liệu (khác rỗng).</summary>
+        private async Task<bool> WaitDutyDateAsync(TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(DutyDateSelector)}});
+                  return !!el && el.value.trim() !== '';
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
+        }
+
+        /// <summary>Mở combobox Shift (▼) và chọn dòng cần chọn. Trả về null nếu thành công, ngược lại là thông báo lỗi.</summary>
+        private async Task<string?> SelectShiftAsync(string shift)
+        {
+            // Giống thao tác tay: mở combobox Shift (▼) rồi chạm vào dòng SF1.
             //    Combobox này làm cho màn hình cảm ứng (ddlTouch.js): click chuột sẽ ẩn danh sách trước khi kịp chọn,
             //    nên dòng SF1 được chọn bằng sự kiện chạm (touch).
             for (int attempt = 1; attempt <= 5; attempt++)
@@ -391,6 +639,13 @@ namespace auto_scan_crack
             {
                 return null;
             }
+        }
+
+        /// <summary>Bỏ tiền tố "TR" (mã barcode Terminal) ở đầu mã máy: "TRTB23333" → "TB23333".</summary>
+        public static string StripTerminalPrefix(string terminalId)
+        {
+            var id = terminalId.Trim();
+            return id.StartsWith("TR", StringComparison.OrdinalIgnoreCase) && id.Length > 2 ? id[2..] : id;
         }
 
         /// <summary>Chuyển chuỗi C# thành chuỗi JS an toàn (có dấu nháy).</summary>

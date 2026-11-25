@@ -6,3 +6,6 @@
 # Build output
 bin/
 obj/
+
+# Cấu hình kết nối DB (có thể chứa mật khẩu) — chỉ commit file mẫu connection.example.txt
+connection.txt
