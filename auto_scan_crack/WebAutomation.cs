@@ -122,6 +122,10 @@ namespace auto_scan_crack
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
 
+            // Trang đang dừng ở màn hình "You are logged in another process" (lần trước Login bị chặn)
+            if (await IsLoggedInAnotherProcessAsync())
+                return LoggedInAnotherProcessError(terminalId);
+
             var title = (await GetPageTitleAsync()).ToLowerInvariant();
 
             if (title.Contains(PoEntryTitle.ToLowerInvariant()))
@@ -232,10 +236,16 @@ namespace auto_scan_crack
                 return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
             await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
 
-            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry"
+            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry".
+            //    Nếu trang báo "You are logged in another process" → dừng, không làm các bước sau.
             await Task.Delay(500);
-            if (!await WaitTitleAsync(OperatorEntryTitle, TimeSpan.FromSeconds(30)))
-                return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            switch (await WaitAfterLoginAsync(TimeSpan.FromSeconds(30)))
+            {
+                case AfterLogin.LoggedInAnotherProcess:
+                    return LoggedInAnotherProcessError(terminalId);
+                case AfterLogin.Timeout:
+                    return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            }
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang Operator entry chưa tải xong.";
 
@@ -351,6 +361,49 @@ namespace auto_scan_crack
             EvalAsync($"window.__autoScanPaused = {(paused ? "true" : "false")};");
 
         /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
+        private enum AfterLogin { OperatorEntry, LoggedInAnotherProcess, Timeout }
+
+        /// <summary>
+        /// Câu trang web hiện khi Terminal ID đang đăng nhập ở nơi khác:
+        /// "You are logged in another process. Let me read the administrator ID if you use this process."
+        /// So khớp không phân biệt hoa thường, bỏ khoảng trắng thừa.
+        /// </summary>
+        public const string LoggedInAnotherProcessText = "logged in another process";
+
+        private static string LoggedInAnotherProcessError(string terminalId) =>
+            $"Trang web báo: \"You are logged in another process.\"\n" +
+            $"Terminal ID \"{terminalId}\" đang đăng nhập ở nơi khác (tab khác trong app, máy khác hoặc trình duyệt khác).\n" +
+            "Vui lòng kiểm tra lại thông tin (Terminal ID, MSNV), đăng xuất ở nơi kia hoặc liên hệ quản lý rồi quét lại PO.";
+
+        private static readonly string LoggedInAnotherProcessJs = $$"""
+            (() => {
+              const t = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').toLowerCase();
+              return t.includes({{Js(LoggedInAnotherProcessText)}});
+            })()
+            """;
+
+        /// <summary>Trang hiện tại có đang hiện câu "You are logged in another process" không.</summary>
+        private async Task<bool> IsLoggedInAnotherProcessAsync() =>
+            (await EvalAsync(LoggedInAnotherProcessJs))?.ValueKind == JsonValueKind.True;
+
+        /// <summary>Sau khi nhấn Login: chờ trang "Operator entry" hoặc màn hình "logged in another process".</summary>
+        private async Task<AfterLogin> WaitAfterLoginAsync(TimeSpan timeout)
+        {
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating())
+                {
+                    if (await IsLoggedInAnotherProcessAsync())
+                        return AfterLogin.LoggedInAnotherProcess;
+                    if ((await GetPageTitleAsync()).Contains(OperatorEntryTitle, StringComparison.OrdinalIgnoreCase))
+                        return AfterLogin.OperatorEntry;
+                }
+                await Task.Delay(200);
+            }
+            return AfterLogin.Timeout;
+        }
+
         private async Task<bool> WaitTitleAsync(string text, TimeSpan timeout)
         {
             var script = $$"""
