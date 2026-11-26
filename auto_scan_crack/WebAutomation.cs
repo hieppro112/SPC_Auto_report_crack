@@ -41,6 +41,12 @@ namespace auto_scan_crack
         /// <summary>Tiêu đề trang PO entry (đã đăng nhập → chỉ làm từ bước nhập MSNV).</summary>
         public const string PoEntryTitle = "PO entry";
 
+        /// <summary>
+        /// Nhãn số PO (InstrNo) hiện ra sau khi nhập PO thành công.
+        /// Chỉ khi nhãn này có trên trang mới chuyển sang mở WorkSupportSystem.
+        /// </summary>
+        public const string InstructionNoSelector = "#lblInstructionNo";
+
         /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
         public const string OperatorInputSelector = "#txtOperatorID";
 
@@ -100,6 +106,94 @@ namespace auto_scan_crack
             })();
             """;
 
+        /// <summary>Nút kết thúc PO — bị khóa khi PO chưa đủ thời gian.</summary>
+        public const string PoFinishButtonSelector = "#btnPOFinish";
+
+        /// <summary>
+        /// Script khóa nút POFinish khi PO chưa đủ thời gian.
+        /// - Chỉ khóa nếu trang đang hiện đúng số PO đang đếm giờ (trang của PO khác vẫn bấm bình thường).
+        /// - Chặn click / chạm / Enter vào nút ngay từ pha capture nên sự kiện của trang (postback) không chạy.
+        /// - Làm mờ nút và hiện thời gian còn lại đè lên nút; hết giờ thì tự mở khóa (không cần app báo).
+        /// - Bấm vào lúc đang khóa → báo về app ({type:'poFinishBlocked'}) để hiện cảnh báo.
+        /// Không đổi value/disabled của nút để không ảnh hưởng dữ liệu postback của ASP.NET.
+        /// <paramref name="po"/> = null → bỏ khóa.
+        /// </summary>
+        public static string BuildPoFinishLockScript(string? po, long endAtUnixMs)
+        {
+            var lockJson = po is null ? "null" : JsonSerializer.Serialize(new { po, endAt = endAtUnixMs });
+            return $$"""
+                (() => {
+                  window.__poFinishLock = {{lockJson}};
+                  if (window.__poFinishLockHooked) { window.__poFinishLockApply && window.__poFinishLockApply(); return; }
+                  window.__poFinishLockHooked = true;
+                  const SEL = {{Js(PoFinishButtonSelector)}};
+                  const active = () => {
+                    const L = window.__poFinishLock;
+                    if (!L || Date.now() >= L.endAt || !document.body) return null;
+                    return document.body.innerText.includes(L.po) ? L : null;
+                  };
+                  const fmt = ms => {
+                    const s = Math.max(0, Math.ceil(ms / 1000));
+                    const p = n => String(n).padStart(2, '0');
+                    return (s >= 3600 ? p(Math.floor(s / 3600)) + ':' : '') + p(Math.floor(s % 3600 / 60)) + ':' + p(s % 60);
+                  };
+                  const onButton = el => !!(el && el.closest && el.closest(SEL));
+                  let lastReport = 0;
+                  const block = e => {
+                    if (!onButton(e.target)) return;
+                    const L = active();
+                    if (!L) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if ((e.type === 'click' || e.type === 'touchend') && Date.now() - lastReport > 800) {
+                      lastReport = Date.now();
+                      window.chrome.webview.postMessage(JSON.stringify({ type: 'poFinishBlocked', po: L.po }));
+                    }
+                  };
+                  for (const t of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'touchstart', 'touchend'])
+                    window.addEventListener(t, block, { capture: true, passive: false });
+                  window.addEventListener('keydown', e => {
+                    if ((e.key === 'Enter' || e.key === ' ') && onButton(document.activeElement) && active()) {
+                      e.preventDefault();
+                      e.stopImmediatePropagation();
+                    }
+                  }, true);
+
+                  // Hiện trạng thái khóa: làm mờ nút + nhãn đếm ngược đè lên nút (không nhận chuột)
+                  let badge = null;
+                  const apply = () => {
+                    const b = document.querySelector(SEL);
+                    const L = b ? active() : null;
+                    if (!L) {
+                      if (b && b.dataset.poLocked) { b.style.opacity = ''; b.style.cursor = ''; b.title = ''; delete b.dataset.poLocked; }
+                      if (badge) badge.style.display = 'none';
+                      return;
+                    }
+                    const left = fmt(L.endAt - Date.now());
+                    b.dataset.poLocked = '1';
+                    b.style.opacity = '0.35';
+                    b.style.cursor = 'not-allowed';
+                    b.title = 'Chưa đủ thời gian cho PO ' + L.po + ' — còn ' + left;
+                    if (!badge || !badge.isConnected) {
+                      badge = document.createElement('div');
+                      badge.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:flex;' +
+                        'align-items:center;justify-content:center;flex-direction:column;font:bold 14px Segoe UI,Arial;' +
+                        'color:#fff;background:rgba(183,28,28,.85);border-radius:6px;text-align:center;line-height:1.15';
+                      document.body.appendChild(badge);
+                    }
+                    const r = b.getBoundingClientRect();
+                    badge.style.left = r.left + 'px'; badge.style.top = r.top + 'px';
+                    badge.style.width = r.width + 'px'; badge.style.height = r.height + 'px';
+                    badge.style.display = (r.width && r.height) ? 'flex' : 'none';
+                    badge.innerHTML = '<span style="font-size:11px">CHƯA ĐỦ GIỜ</span><span>' + left + '</span>';
+                  };
+                  window.__poFinishLockApply = apply;
+                  setInterval(apply, 500);
+                  apply();
+                })();
+                """;
+        }
+
         private readonly CoreWebView2 _core;
         private readonly Func<bool> _isNavigating;
 
@@ -121,6 +215,10 @@ namespace auto_scan_crack
         {
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
+
+            // Trang đang dừng ở màn hình "You are logged in another process" (lần trước Login bị chặn)
+            if (await IsLoggedInAnotherProcessAsync())
+                return LoggedInAnotherProcessError(terminalId);
 
             var title = (await GetPageTitleAsync()).ToLowerInvariant();
 
@@ -232,10 +330,16 @@ namespace auto_scan_crack
                 return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
             await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
 
-            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry"
+            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry".
+            //    Nếu trang báo "You are logged in another process" → dừng, không làm các bước sau.
             await Task.Delay(500);
-            if (!await WaitTitleAsync(OperatorEntryTitle, TimeSpan.FromSeconds(30)))
-                return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            switch (await WaitAfterLoginAsync(TimeSpan.FromSeconds(30)))
+            {
+                case AfterLogin.LoggedInAnotherProcess:
+                    return LoggedInAnotherProcessError(terminalId);
+                case AfterLogin.Timeout:
+                    return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+            }
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang Operator entry chưa tải xong.";
 
@@ -298,7 +402,33 @@ namespace auto_scan_crack
             // Gõ PO rồi nhấn Enter
             await TypeAndEnterAsync(po);
 
+            // Chờ tối đa 30s cho #lblInstructionNo xuất hiện (có số PO) → mới coi là xong phần web
+            // (app chỉ chuyển sang mở WorkSupportSystem khi hàm này trả về null)
+            await Task.Delay(500);
+            if (!await WaitInstructionNoAsync(TimeSpan.FromSeconds(30)))
+                return $"Sau 30 giây trang không hiện {InstructionNoSelector} sau khi nhập PO {po}.\n" +
+                       "Chưa mở WorkSupportSystem. Vui lòng kiểm tra lại thông tin (Terminal ID, MSNV, PO) trên trang web.";
+
             return null;
+        }
+
+        /// <summary>Chờ đến khi #lblInstructionNo có trên trang và có nội dung.</summary>
+        private async Task<bool> WaitInstructionNoAsync(TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(InstructionNoSelector)}});
+                  return !!el && el.textContent.trim() !== '';
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
         }
 
         /// <summary>Chờ phần tử hiện ra trên trang; trả về tọa độ tâm của nó.</summary>
@@ -351,6 +481,49 @@ namespace auto_scan_crack
             EvalAsync($"window.__autoScanPaused = {(paused ? "true" : "false")};");
 
         /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
+        private enum AfterLogin { OperatorEntry, LoggedInAnotherProcess, Timeout }
+
+        /// <summary>
+        /// Câu trang web hiện khi Terminal ID đang đăng nhập ở nơi khác:
+        /// "You are logged in another process. Let me read the administrator ID if you use this process."
+        /// So khớp không phân biệt hoa thường, bỏ khoảng trắng thừa.
+        /// </summary>
+        public const string LoggedInAnotherProcessText = "logged in another process";
+
+        private static string LoggedInAnotherProcessError(string terminalId) =>
+            $"Trang web báo: \"You are logged in another process.\"\n" +
+            $"Terminal ID \"{terminalId}\" đang đăng nhập ở nơi khác (tab khác trong app, máy khác hoặc trình duyệt khác).\n" +
+            "Vui lòng kiểm tra lại thông tin (Terminal ID, MSNV), đăng xuất ở nơi kia hoặc liên hệ quản lý rồi quét lại PO.";
+
+        private static readonly string LoggedInAnotherProcessJs = $$"""
+            (() => {
+              const t = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').toLowerCase();
+              return t.includes({{Js(LoggedInAnotherProcessText)}});
+            })()
+            """;
+
+        /// <summary>Trang hiện tại có đang hiện câu "You are logged in another process" không.</summary>
+        private async Task<bool> IsLoggedInAnotherProcessAsync() =>
+            (await EvalAsync(LoggedInAnotherProcessJs))?.ValueKind == JsonValueKind.True;
+
+        /// <summary>Sau khi nhấn Login: chờ trang "Operator entry" hoặc màn hình "logged in another process".</summary>
+        private async Task<AfterLogin> WaitAfterLoginAsync(TimeSpan timeout)
+        {
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating())
+                {
+                    if (await IsLoggedInAnotherProcessAsync())
+                        return AfterLogin.LoggedInAnotherProcess;
+                    if ((await GetPageTitleAsync()).Contains(OperatorEntryTitle, StringComparison.OrdinalIgnoreCase))
+                        return AfterLogin.OperatorEntry;
+                }
+                await Task.Delay(200);
+            }
+            return AfterLogin.Timeout;
+        }
+
         private async Task<bool> WaitTitleAsync(string text, TimeSpan timeout)
         {
             var script = $$"""

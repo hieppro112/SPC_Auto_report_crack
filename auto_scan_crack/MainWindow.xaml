@@ -3,7 +3,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
         Title="Auto Scan Crack" Height="800" Width="1280"
         WindowState="Maximized" WindowStartupLocation="CenterScreen"
@@ -113,8 +112,37 @@
             </Grid>
         </Border>
 
-        <!-- ===== WEB NHẬP THAO TÁC ===== -->
-        <wv2:WebView2 x:Name="webView" Grid.Row="1"/>
+        <!-- ===== WEB NHẬP THAO TÁC: tab trình duyệt kiểu Edge (+ thêm, × đóng), tự động chạy trên tab đang chọn ===== -->
+        <DockPanel Grid.Row="1">
+            <!-- TabControl chỉ dùng làm thanh tiêu đề tab; WebView2 của các tab nằm chung trong browserHost
+                 (ẩn/hiện theo tab đang chọn) để đổi tab không phải tạo lại trình duyệt -->
+            <TabControl x:Name="tabBrowsers" DockPanel.Dock="Top"
+                        SelectionChanged="TabBrowsers_SelectionChanged">
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <Border Background="#E4E7EC" Padding="6,4,6,0" BorderBrush="#D0D5DD" BorderThickness="0,0,0,1">
+                            <StackPanel Orientation="Horizontal">
+                                <TabPanel IsItemsHost="True"/>
+                                <Button x:Name="btnAddTab" Content="+" Click="BtnAddTab_Click"
+                                        Width="30" Height="28" Margin="4,0,0,2" FontSize="18"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                        Focusable="False" ToolTip="Mở tab mới"/>
+                            </StackPanel>
+                        </Border>
+                    </ControlTemplate>
+                </TabControl.Template>
+                <TabControl.Resources>
+                    <Style TargetType="TabItem">
+                        <Setter Property="FontSize" Value="14"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Padding" Value="12,4,6,4"/>
+                        <Setter Property="MinWidth" Value="120"/>
+                    </Style>
+                </TabControl.Resources>
+            </TabControl>
+
+            <Grid x:Name="browserHost"/>
+        </DockPanel>
 
         <!-- ===== THANH TRẠNG THÁI ===== -->
         <Border Grid.Row="2" Background="#F2F4F7" BorderBrush="#D0D5DD" BorderThickness="0,1,0,0" Padding="12,4">

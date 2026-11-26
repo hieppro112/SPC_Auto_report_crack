@@ -81,6 +81,7 @@ namespace auto_scan_crack
                 startedAt.AddSeconds(good.Value * SecondsPerPiece + ExtraSeconds));
             _poTimerState = state;
             SavePoTimer(state);
+            UpdatePoFinishLock();   // chưa đủ giờ → khóa nút POFinish trên web
             _poTimer.Start();
             PoTimerTick();
         }
@@ -106,6 +107,7 @@ namespace auto_scan_crack
             _poTimerState = null;
             _poTimer.Stop();
             SavePoTimer(null);
+            UpdatePoFinishLock();   // đủ giờ → mở khóa nút POFinish
             lblPoTimerCaption.Text = "Thời gian PO";
             lblPoRemaining.Text = $"Đã đủ ({state.Po})";
             ShowPoReminder(state);

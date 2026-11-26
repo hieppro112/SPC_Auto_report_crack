@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
@@ -25,8 +25,6 @@ namespace auto_scan_crack
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "auto_scan_crack", "msnv.txt");
 
-        private WebAutomation? _automation;
-        private bool _navigating;
         private bool _busy;   // đang chạy tự động → bỏ qua lần quét chồng lên
 
         public MainWindow()
@@ -41,61 +39,10 @@ namespace auto_scan_crack
             InitPoTimer();
             // Mã quét/gõ được tự phân loại dù con trỏ ở ô nào → luôn để con trỏ ở ô QUÉT MÃ cho dễ thấy
             txtPO.Focus();
+            await InitBrowserTabsAsync();
+
             if (string.IsNullOrWhiteSpace(txtTerminalId.Text) || string.IsNullOrWhiteSpace(txtMsnv.Text))
                 SetStatus("Quét mã máy (TRTB…) và MSNV trước khi quét PO.");
-
-            try
-            {
-                var env = await CoreWebView2Environment.CreateAsync(null, UserDataFolder);
-                await webView.EnsureCoreWebView2Async(env);
-            }
-            catch (WebView2RuntimeNotFoundException)
-            {
-                SetStatus("Máy chưa cài Microsoft Edge WebView2 Runtime.");
-                MessageBox.Show(this,
-                    "Máy chưa cài Microsoft Edge WebView2 Runtime.\nVui lòng liên hệ IT để cài đặt.",
-                    "Thiếu WebView2", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-            catch (Exception ex)
-            {
-                SetStatus("Lỗi khởi tạo trình duyệt: " + ex.Message);
-                return;
-            }
-
-            var core = webView.CoreWebView2;
-            core.Settings.AreDevToolsEnabled = true;          // tắt khi phát hành nếu cần
-            core.Settings.IsStatusBarEnabled = false;
-
-            _automation = new WebAutomation(core, () => _navigating);
-
-            // Bắt mã quét khi con trỏ đang nằm trong trang web
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(WebAutomation.ScanHookScript);
-            core.WebMessageReceived += Core_WebMessageReceived;
-
-            core.NavigationStarting += (_, args) =>
-            {
-                _navigating = true;
-                if (!_busy) SetStatus("Đang tải...");
-                lblUrl.Text = args.Uri;
-            };
-            core.NavigationCompleted += (_, args) =>
-            {
-                _navigating = false;
-                lblUrl.Text = core.Source;
-                if (_busy) return;
-                SetStatus(args.IsSuccess
-                    ? "Sẵn sàng"
-                    : $"Không tải được trang ({args.WebErrorStatus}). Kiểm tra kết nối tới máy chủ.");
-            };
-            // Link mở cửa sổ mới (target=_blank, window.open) → mở ngay trong khung hiện tại
-            core.NewWindowRequested += (_, args) =>
-            {
-                args.Handled = true;
-                core.Navigate(args.Uri);
-            };
-
-            core.Navigate(HomeUrl);
         }
 
         // ===== Quét PO =====
@@ -110,6 +57,7 @@ namespace auto_scan_crack
 
         private void Window_PreviewTextInput(object sender, TextCompositionEventArgs e)
         {
+            if (IsRenamingTab) return;   // đang gõ tên tab → để chữ vào ô đổi tên
             e.Handled = true;   // không cho chữ đi thẳng vào ô đang có con trỏ
             if (string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
 
@@ -148,8 +96,15 @@ namespace auto_scan_crack
             {
                 using var doc = JsonDocument.Parse(e.TryGetWebMessageAsString());
                 var root = doc.RootElement;
-                if (root.GetProperty("type").GetString() == "scan")
-                    HandleScannedCode(root.GetProperty("code").GetString() ?? "");
+                switch (root.GetProperty("type").GetString())
+                {
+                    case "scan":
+                        HandleScannedCode(root.GetProperty("code").GetString() ?? "");
+                        break;
+                    case "poFinishBlocked":
+                        OnPoFinishBlocked(root.GetProperty("po").GetString() ?? "");
+                        break;
+                }
             }
             catch
             {
@@ -222,37 +177,42 @@ namespace auto_scan_crack
                 ShowError("CHƯA NHẬP MSNV", "Vui lòng nhập MSNV trước khi quét PO.", txtMsnv);
                 return;
             }
-            if (_automation is null)
+            // Tự động click/nhập trên tab trình duyệt đang được chọn
+            var tab = SelectedTab;
+            if (tab?.Automation is not { } automation)
             {
-                ShowError("TRÌNH DUYỆT CHƯA SẴN SÀNG", "Vui lòng chờ trang web tải xong rồi quét lại PO.", txtPO);
+                ShowError("TRÌNH DUYỆT CHƯA SẴN SÀNG",
+                    $"{tab?.Title ?? "Tab"} chưa tải xong. Vui lòng chờ trang web tải xong rồi quét lại PO.", txtPO);
                 return;
             }
             _busy = true;
+            LockTabs(tab);
             lblCurrentPO.Text = po;
 
             // Báo xanh 2 giây: đã bắt đầu chạy, không quét thêm PO
-            ShowInfo("BẮT ĐẦU CHẠY PO", $"PO: {po}\nVui lòng không quét thêm PO cho đến khi hoàn tất.", 2);
+            ShowInfo("BẮT ĐẦU CHẠY PO", $"PO: {po} — {tab.Title}\nVui lòng không quét thêm PO cho đến khi hoàn tất.", 2);
 
-            SetStatus($"Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login, nhập MSNV và PO...");
+            SetStatus($"[{tab.Title}] Đã quét PO: {po} — đang điền Terminal ID, chọn Shift, Login, nhập MSNV và PO...");
             try
             {
-                webView.Focus();   // để phím gõ tự động đi vào trang web
-                var error = await _automation.RunAsync(terminalId, msnv, po);
+                tab.View.Focus();   // để phím gõ tự động đi vào trang web của tab này
+                var error = await automation.RunAsync(terminalId, msnv, po);
                 if (error is null)
                 {
-                    SetStatus($"PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})");
+                    SetStatus($"[{tab.Title}] PO: {po} | Đã Login (Terminal \"{terminalId}\"), nhập MSNV \"{msnv}\" và nhập PO  ({DateTime.Now:HH:mm:ss})");
                     await SendPoToWorkSupportAsync(po);
                 }
                 else
-                    ShowError("LỖI TỰ ĐỘNG", $"PO: {po}\n{error}");
+                    ShowError("LỖI TỰ ĐỘNG", $"PO: {po} — {tab.Title}\n{error}");
             }
             catch (Exception ex)
             {
-                ShowError("LỖI TỰ ĐỘNG", $"PO: {po}\n{ex.Message}");
+                ShowError("LỖI TỰ ĐỘNG", $"PO: {po} — {tab.Title}\n{ex.Message}");
             }
             finally
             {
                 _busy = false;
+                LockTabs(null);
             }
         }
 
@@ -375,6 +335,7 @@ namespace auto_scan_crack
 
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (IsRenamingTab) return;   // Enter/Esc/Backspace dành cho ô đổi tên tab
             switch (e.Key)
             {
                 case Key.Enter:         // kết thúc 1 mã (máy quét luôn gửi Enter ở cuối)
@@ -395,7 +356,7 @@ namespace auto_scan_crack
                     e.Handled = true;
                     break;
                 case Key.F5:
-                    webView.CoreWebView2?.Reload();
+                    SelectedTab?.View.CoreWebView2?.Reload();
                     e.Handled = true;
                     break;
             }
@@ -403,12 +364,13 @@ namespace auto_scan_crack
 
         private void BtnBack_Click(object sender, RoutedEventArgs e)
         {
-            if (webView.CoreWebView2?.CanGoBack == true) webView.CoreWebView2.GoBack();
+            var core = SelectedTab?.View.CoreWebView2;
+            if (core?.CanGoBack == true) core.GoBack();
         }
 
-        private void BtnReload_Click(object sender, RoutedEventArgs e) => webView.CoreWebView2?.Reload();
+        private void BtnReload_Click(object sender, RoutedEventArgs e) => SelectedTab?.View.CoreWebView2?.Reload();
 
-        private void BtnHome_Click(object sender, RoutedEventArgs e) => webView.CoreWebView2?.Navigate(HomeUrl);
+        private void BtnHome_Click(object sender, RoutedEventArgs e) => SelectedTab?.View.CoreWebView2?.Navigate(HomeUrl);
 
         private void SetStatus(string text) => lblStatus.Text = text;
 
@@ -423,7 +385,7 @@ namespace auto_scan_crack
             {
                 if (_info == info) _info = null;
                 Activate();
-                if (_busy) webView.Focus();   // đang tự động → trả focus cho trang web
+                if (_busy) _runningTab?.View.Focus();   // đang tự động → trả focus cho trang web của tab đang chạy
                 else txtPO.Focus();
             };
             _info = info;
