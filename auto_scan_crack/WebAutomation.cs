@@ -106,6 +106,94 @@ namespace auto_scan_crack
             })();
             """;
 
+        /// <summary>Nút kết thúc PO — bị khóa khi PO chưa đủ thời gian.</summary>
+        public const string PoFinishButtonSelector = "#btnPOFinish";
+
+        /// <summary>
+        /// Script khóa nút POFinish khi PO chưa đủ thời gian.
+        /// - Chỉ khóa nếu trang đang hiện đúng số PO đang đếm giờ (trang của PO khác vẫn bấm bình thường).
+        /// - Chặn click / chạm / Enter vào nút ngay từ pha capture nên sự kiện của trang (postback) không chạy.
+        /// - Làm mờ nút và hiện thời gian còn lại đè lên nút; hết giờ thì tự mở khóa (không cần app báo).
+        /// - Bấm vào lúc đang khóa → báo về app ({type:'poFinishBlocked'}) để hiện cảnh báo.
+        /// Không đổi value/disabled của nút để không ảnh hưởng dữ liệu postback của ASP.NET.
+        /// <paramref name="po"/> = null → bỏ khóa.
+        /// </summary>
+        public static string BuildPoFinishLockScript(string? po, long endAtUnixMs)
+        {
+            var lockJson = po is null ? "null" : JsonSerializer.Serialize(new { po, endAt = endAtUnixMs });
+            return $$"""
+                (() => {
+                  window.__poFinishLock = {{lockJson}};
+                  if (window.__poFinishLockHooked) { window.__poFinishLockApply && window.__poFinishLockApply(); return; }
+                  window.__poFinishLockHooked = true;
+                  const SEL = {{Js(PoFinishButtonSelector)}};
+                  const active = () => {
+                    const L = window.__poFinishLock;
+                    if (!L || Date.now() >= L.endAt || !document.body) return null;
+                    return document.body.innerText.includes(L.po) ? L : null;
+                  };
+                  const fmt = ms => {
+                    const s = Math.max(0, Math.ceil(ms / 1000));
+                    const p = n => String(n).padStart(2, '0');
+                    return (s >= 3600 ? p(Math.floor(s / 3600)) + ':' : '') + p(Math.floor(s % 3600 / 60)) + ':' + p(s % 60);
+                  };
+                  const onButton = el => !!(el && el.closest && el.closest(SEL));
+                  let lastReport = 0;
+                  const block = e => {
+                    if (!onButton(e.target)) return;
+                    const L = active();
+                    if (!L) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if ((e.type === 'click' || e.type === 'touchend') && Date.now() - lastReport > 800) {
+                      lastReport = Date.now();
+                      window.chrome.webview.postMessage(JSON.stringify({ type: 'poFinishBlocked', po: L.po }));
+                    }
+                  };
+                  for (const t of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'touchstart', 'touchend'])
+                    window.addEventListener(t, block, { capture: true, passive: false });
+                  window.addEventListener('keydown', e => {
+                    if ((e.key === 'Enter' || e.key === ' ') && onButton(document.activeElement) && active()) {
+                      e.preventDefault();
+                      e.stopImmediatePropagation();
+                    }
+                  }, true);
+
+                  // Hiện trạng thái khóa: làm mờ nút + nhãn đếm ngược đè lên nút (không nhận chuột)
+                  let badge = null;
+                  const apply = () => {
+                    const b = document.querySelector(SEL);
+                    const L = b ? active() : null;
+                    if (!L) {
+                      if (b && b.dataset.poLocked) { b.style.opacity = ''; b.style.cursor = ''; b.title = ''; delete b.dataset.poLocked; }
+                      if (badge) badge.style.display = 'none';
+                      return;
+                    }
+                    const left = fmt(L.endAt - Date.now());
+                    b.dataset.poLocked = '1';
+                    b.style.opacity = '0.35';
+                    b.style.cursor = 'not-allowed';
+                    b.title = 'Chưa đủ thời gian cho PO ' + L.po + ' — còn ' + left;
+                    if (!badge || !badge.isConnected) {
+                      badge = document.createElement('div');
+                      badge.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:flex;' +
+                        'align-items:center;justify-content:center;flex-direction:column;font:bold 14px Segoe UI,Arial;' +
+                        'color:#fff;background:rgba(183,28,28,.85);border-radius:6px;text-align:center;line-height:1.15';
+                      document.body.appendChild(badge);
+                    }
+                    const r = b.getBoundingClientRect();
+                    badge.style.left = r.left + 'px'; badge.style.top = r.top + 'px';
+                    badge.style.width = r.width + 'px'; badge.style.height = r.height + 'px';
+                    badge.style.display = (r.width && r.height) ? 'flex' : 'none';
+                    badge.innerHTML = '<span style="font-size:11px">CHƯA ĐỦ GIỜ</span><span>' + left + '</span>';
+                  };
+                  window.__poFinishLockApply = apply;
+                  setInterval(apply, 500);
+                  apply();
+                })();
+                """;
+        }
+
         private readonly CoreWebView2 _core;
         private readonly Func<bool> _isNavigating;
 

@@ -96,8 +96,15 @@ namespace auto_scan_crack
             {
                 using var doc = JsonDocument.Parse(e.TryGetWebMessageAsString());
                 var root = doc.RootElement;
-                if (root.GetProperty("type").GetString() == "scan")
-                    HandleScannedCode(root.GetProperty("code").GetString() ?? "");
+                switch (root.GetProperty("type").GetString())
+                {
+                    case "scan":
+                        HandleScannedCode(root.GetProperty("code").GetString() ?? "");
+                        break;
+                    case "poFinishBlocked":
+                        OnPoFinishBlocked(root.GetProperty("po").GetString() ?? "");
+                        break;
+                }
             }
             catch
             {

@@ -35,6 +35,9 @@ namespace auto_scan_crack
             public string Title => string.IsNullOrWhiteSpace(CustomName) ? $"Tab {Number}" : CustomName!;
 
             public WebAutomation? Automation { get; set; }
+
+            /// <summary>Id script khóa POFinish đang đăng ký cho tab (để gỡ khi đổi PO / hết giờ).</summary>
+            public string? PoLockScriptId { get; set; }
             public bool Navigating { get; set; }
             public string Status { get; set; } = "Đang khởi tạo...";
             public string Url { get; set; } = "";
@@ -192,6 +195,8 @@ namespace auto_scan_crack
                 args.Handled = true;
                 core.Navigate(args.Uri);
             };
+
+            await ApplyPoFinishLockAsync(tab);   // PO đang đếm giờ (nếu có) → khóa POFinish trên tab này
 
             core.Navigate(HomeUrl);
         }
