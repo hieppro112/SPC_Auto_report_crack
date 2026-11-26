@@ -41,6 +41,12 @@ namespace auto_scan_crack
         /// <summary>Tiêu đề trang PO entry (đã đăng nhập → chỉ làm từ bước nhập MSNV).</summary>
         public const string PoEntryTitle = "PO entry";
 
+        /// <summary>
+        /// Nhãn số PO (InstrNo) hiện ra sau khi nhập PO thành công.
+        /// Chỉ khi nhãn này có trên trang mới chuyển sang mở WorkSupportSystem.
+        /// </summary>
+        public const string InstructionNoSelector = "#lblInstructionNo";
+
         /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
         public const string OperatorInputSelector = "#txtOperatorID";
 
@@ -308,7 +314,33 @@ namespace auto_scan_crack
             // Gõ PO rồi nhấn Enter
             await TypeAndEnterAsync(po);
 
+            // Chờ tối đa 30s cho #lblInstructionNo xuất hiện (có số PO) → mới coi là xong phần web
+            // (app chỉ chuyển sang mở WorkSupportSystem khi hàm này trả về null)
+            await Task.Delay(500);
+            if (!await WaitInstructionNoAsync(TimeSpan.FromSeconds(30)))
+                return $"Sau 30 giây trang không hiện {InstructionNoSelector} sau khi nhập PO {po}.\n" +
+                       "Chưa mở WorkSupportSystem. Vui lòng kiểm tra lại thông tin (Terminal ID, MSNV, PO) trên trang web.";
+
             return null;
+        }
+
+        /// <summary>Chờ đến khi #lblInstructionNo có trên trang và có nội dung.</summary>
+        private async Task<bool> WaitInstructionNoAsync(TimeSpan timeout)
+        {
+            var script = $$"""
+                (() => {
+                  const el = document.querySelector({{Js(InstructionNoSelector)}});
+                  return !!el && el.textContent.trim() !== '';
+                })()
+                """;
+            var deadline = DateTime.Now + timeout;
+            while (DateTime.Now < deadline)
+            {
+                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                    return true;
+                await Task.Delay(200);
+            }
+            return false;
         }
 
         /// <summary>Chờ phần tử hiện ra trên trang; trả về tọa độ tâm của nó.</summary>
