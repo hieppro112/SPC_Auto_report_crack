@@ -99,6 +99,11 @@
                         <TextBlock x:Name="lblCurrentPO" Text="—" Foreground="White" FontSize="16" FontWeight="SemiBold"/>
                     </StackPanel>
                     <StackPanel Orientation="Vertical" Margin="20,0,0,0">
+                        <TextBlock x:Name="lblMsnvCaption" Text="Đổi nhân viên" Foreground="#99FFFFFF" FontSize="11"/>
+                        <TextBlock x:Name="lblMsnvRemaining" Text="—" Foreground="#CE93D8" FontSize="16" FontWeight="Bold"
+                                   ToolTip="Mỗi 2 tiếng phải quét mã nhân viên khác"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Vertical" Margin="20,0,0,0">
                         <TextBlock x:Name="lblPoTimerCaption" Text="Thời gian PO còn lại" Foreground="#99FFFFFF" FontSize="11"/>
                         <TextBlock x:Name="lblPoRemaining" Text="—" Foreground="#FFD54F" FontSize="16" FontWeight="Bold"/>
                     </StackPanel>
