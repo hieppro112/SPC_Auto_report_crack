@@ -36,6 +36,7 @@ namespace auto_scan_crack
         {
             LoadTerminalId();
             txtMsnv.Text = LoadText(MsnvFile, "MSNV");
+            InitMsnvRotation();
             InitPoTimer();
             // Mã quét/gõ được tự phân loại dù con trỏ ở ô nào → luôn để con trỏ ở ô QUÉT MÃ cho dễ thấy
             txtPO.Focus();
@@ -132,10 +133,7 @@ namespace auto_scan_crack
                     break;
 
                 case ScanKind.Msnv:
-                    txtMsnv.Text = code;
-                    SaveText(MsnvFile, code, "MSNV");
-                    SetStatus($"Đã quét MSNV: {code}  ({DateTime.Now:HH:mm:ss})");
-                    txtPO.Focus();
+                    OnMsnvScanned(code);   // luân phiên nhân viên mỗi 2 tiếng (MainWindow.MsnvRotation.cs)
                     break;
 
                 case ScanKind.Po:
@@ -175,6 +173,13 @@ namespace auto_scan_crack
             if (msnv.Length == 0)
             {
                 ShowError("CHƯA NHẬP MSNV", "Vui lòng nhập MSNV trước khi quét PO.", txtMsnv);
+                return;
+            }
+            if (IsMsnvExpired)
+            {
+                ShowError("ĐẾN GIỜ ĐỔI NHÂN VIÊN",
+                    $"MSNV {msnv} đã làm đủ {MsnvValidity.TotalHours:0} tiếng.\n" +
+                    $"Vui lòng quét mã nhân viên KHÁC (không phải {msnv}) rồi mới quét PO {po}.", txtPO);
                 return;
             }
             // Tự động click/nhập trên tab trình duyệt đang được chọn

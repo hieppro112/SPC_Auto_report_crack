@@ -21,6 +21,9 @@ namespace auto_scan_crack
         private const int InitialTabCount = 3;
         private const int MaxTabCount = 10;
 
+        /// <summary>Mức thu phóng mặc định của trang web (0.8 = 80%). Người dùng vẫn Ctrl + lăn chuột để đổi.</summary>
+        private const double DefaultZoomFactor = 0.8;
+
         private sealed class BrowserTab
         {
             /// <summary>Số tab = số profile: tab 1 dùng profile mặc định, tab N dùng profile "TabN".</summary>
@@ -85,7 +88,7 @@ namespace auto_scan_crack
             int number = 1;
             while (_tabs.Any(t => t.Number == number)) number++;
 
-            var view = new WebView2 { Visibility = Visibility.Collapsed };
+            var view = new WebView2 { Visibility = Visibility.Collapsed, ZoomFactor = DefaultZoomFactor };
             var close = new Button
             {
                 Content = "×",
