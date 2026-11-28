@@ -47,6 +47,9 @@ namespace auto_scan_crack
         /// </summary>
         public const string InstructionNoSelector = "#lblInstructionNo";
 
+        /// <summary>Thời gian chờ tối đa cho #lblInstructionNo sau khi nhập PO.</summary>
+        private static readonly TimeSpan InstructionNoTimeout = TimeSpan.FromSeconds(15);
+
         /// <summary>Ô nhập MSNV trên trang Operator entry.</summary>
         public const string OperatorInputSelector = "#txtOperatorID";
 
@@ -213,6 +216,9 @@ namespace auto_scan_crack
         /// </summary>
         public async Task<string?> RunAsync(string terminalId, string msnv, string po, string shift = "1S")
         {
+            _terminalId = terminalId;
+            _anotherProcessSeen = false;
+
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang web chưa tải xong.";
 
@@ -330,15 +336,15 @@ namespace auto_scan_crack
                 return "Không tìm thấy hoặc không bấm được nút Login (" + LoginButtonSelector + ").";
             await ClickAsync(lg.GetProperty("x").GetDouble(), lg.GetProperty("y").GetDouble());
 
-            // 8) Chờ tối đa 30s cho trang mới có tiêu đề #lblTitle chứa "Operator entry".
-            //    Nếu trang báo "You are logged in another process" → dừng, không làm các bước sau.
+            // 8) Chờ tối đa 10s cho trang mới có tiêu đề #lblTitle chứa "Operator entry".
+            //    Nếu trang báo "You are logged in another process" (màn hình Admin) → dừng, không làm các bước sau.
             await Task.Delay(500);
-            switch (await WaitAfterLoginAsync(TimeSpan.FromSeconds(30)))
+            switch (await WaitAfterLoginAsync(AfterLoginTimeout))
             {
                 case AfterLogin.LoggedInAnotherProcess:
                     return LoggedInAnotherProcessError(terminalId);
                 case AfterLogin.Timeout:
-                    return $"Sau 30 giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
+                    return $"Sau {AfterLoginTimeout.TotalSeconds:0} giây trang không hiện \"{OperatorEntryTitle}\" ({TitleSelector}) nên chưa nhập MSNV.";
             }
             if (!await WaitPageReadyAsync(TimeSpan.FromSeconds(10)))
                 return "Trang Operator entry chưa tải xong.";
@@ -394,6 +400,8 @@ namespace auto_scan_crack
         private async Task<string?> EnterPoAsync(string po, string missingHint)
         {
             var lblPo = await WaitVisibleAsync(PoLabelSelector, TimeSpan.FromSeconds(30));
+            if (_anotherProcessSeen)
+                return LoggedInAnotherProcessError(_terminalId);
             if (lblPo is not { } pp)
                 return $"Sau 30 giây không thấy {PoLabelSelector} ({missingHint}) nên chưa nhập PO.";
             await ClickAsync(pp.x, pp.y);
@@ -402,11 +410,14 @@ namespace auto_scan_crack
             // Gõ PO rồi nhấn Enter
             await TypeAndEnterAsync(po);
 
-            // Chờ tối đa 30s cho #lblInstructionNo xuất hiện (có số PO) → mới coi là xong phần web
+            // Chờ tối đa 15s cho #lblInstructionNo xuất hiện (có số PO) → mới coi là xong phần web
             // (app chỉ chuyển sang mở WorkSupportSystem khi hàm này trả về null)
             await Task.Delay(500);
-            if (!await WaitInstructionNoAsync(TimeSpan.FromSeconds(30)))
-                return $"Sau 30 giây trang không hiện {InstructionNoSelector} sau khi nhập PO {po}.\n" +
+            var hasInstructionNo = await WaitInstructionNoAsync(InstructionNoTimeout);
+            if (_anotherProcessSeen)
+                return LoggedInAnotherProcessError(_terminalId);
+            if (!hasInstructionNo)
+                return $"Sau {InstructionNoTimeout.TotalSeconds:0} giây trang không hiện {InstructionNoSelector} sau khi nhập PO {po}.\n" +
                        "Chưa mở WorkSupportSystem. Vui lòng kiểm tra lại thông tin (Terminal ID, MSNV, PO) trên trang web.";
 
             return null;
@@ -424,11 +435,27 @@ namespace auto_scan_crack
             var deadline = DateTime.Now + timeout;
             while (DateTime.Now < deadline)
             {
-                if (!_isNavigating() && (await EvalAsync(script))?.ValueKind == JsonValueKind.True)
-                    return true;
+                if (!_isNavigating())
+                {
+                    if ((await EvalAsync(script))?.ValueKind == JsonValueKind.True)
+                        return true;
+                    if (await CheckAnotherProcessAsync()) return false;   // màn hình Admin → dừng ngay
+                }
                 await Task.Delay(200);
             }
             return false;
+        }
+
+        // Màn hình "You are logged in another process" có thể hiện ở bước sau Login (vd sau khi nhập MSNV)
+        // → các bước chờ sau Login cũng kiểm tra, thấy là dừng ngay chứ không đợi hết 30 giây.
+        private string _terminalId = "";
+        private bool _anotherProcessSeen;
+
+        private async Task<bool> CheckAnotherProcessAsync()
+        {
+            if (await IsLoggedInAnotherProcessAsync())
+                _anotherProcessSeen = true;
+            return _anotherProcessSeen;
         }
 
         /// <summary>Chờ phần tử hiện ra trên trang; trả về tọa độ tâm của nó.</summary>
@@ -449,8 +476,12 @@ namespace auto_scan_crack
             var deadline = DateTime.Now + timeout;
             while (DateTime.Now < deadline)
             {
-                if (!_isNavigating() && await EvalAsync(script) is { ValueKind: JsonValueKind.Object } r)
-                    return (r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble());
+                if (!_isNavigating())
+                {
+                    if (await EvalAsync(script) is { ValueKind: JsonValueKind.Object } r)
+                        return (r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble());
+                    if (await CheckAnotherProcessAsync()) return null;   // màn hình Admin → dừng ngay
+                }
                 await Task.Delay(200);
             }
             return null;
@@ -482,6 +513,9 @@ namespace auto_scan_crack
 
         /// <summary>Chờ đến khi #lblTitle chứa đoạn chữ cần tìm (không phân biệt hoa thường).</summary>
         private enum AfterLogin { OperatorEntry, LoggedInAnotherProcess, Timeout }
+
+        /// <summary>Thời gian chờ tối đa sau khi nhấn Login (ra trang Operator entry hoặc màn hình "logged in another process").</summary>
+        private static readonly TimeSpan AfterLoginTimeout = TimeSpan.FromSeconds(10);
 
         /// <summary>
         /// Câu trang web hiện khi Terminal ID đang đăng nhập ở nơi khác:
