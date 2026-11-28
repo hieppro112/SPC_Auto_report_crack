@@ -726,9 +726,57 @@ namespace auto_scan_crack
             return false;
         }
 
+        private bool _calibrateToggle;
+
+        /// <summary>
+        /// Tỉ lệ giữa tọa độ trong trang (CSS px, lấy từ getBoundingClientRect) và tọa độ gửi qua DevTools Input.
+        /// Khi trang bị thu phóng (vd 80%) hai loại tọa độ này có thể khác nhau → đo thực tế:
+        /// gửi 1 lần di chuột tới điểm (p, p) rồi đọc clientX/clientY trang nhận được.
+        /// Trả về số CSS px ứng với 1 đơn vị tọa độ Input (1 nếu không đo được).
+        /// </summary>
+        private async Task<(double sx, double sy)> GetInputScaleAsync()
+        {
+            await EvalAsync("""
+                (() => {
+                  if (!window.__cdpCal) {
+                    window.__cdpCal = {};
+                    window.addEventListener('mousemove', e => { window.__cdpCal.x = e.clientX; window.__cdpCal.y = e.clientY; }, true);
+                  }
+                  window.__cdpCal.x = null;
+                  window.__cdpCal.y = null;
+                  return true;
+                })()
+                """);
+
+            // Đổi điểm mỗi lần để chắc chắn trình duyệt phát sự kiện mousemove
+            _calibrateToggle = !_calibrateToggle;
+            double p = _calibrateToggle ? 200 : 220;
+            await _core.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent",
+                JsonSerializer.Serialize(new { type = "mouseMoved", x = p, y = p }));
+            await Task.Delay(30);
+
+            var r = await EvalAsync("window.__cdpCal ? [window.__cdpCal.x, window.__cdpCal.y] : null");
+            if (r is { ValueKind: JsonValueKind.Array } arr && arr.GetArrayLength() == 2
+                && arr[0].ValueKind == JsonValueKind.Number && arr[1].ValueKind == JsonValueKind.Number)
+            {
+                double sx = arr[0].GetDouble() / p, sy = arr[1].GetDouble() / p;
+                if (sx is > 0.2 and < 5 && sy is > 0.2 and < 5)
+                    return (sx, sy);
+            }
+            return (1, 1);
+        }
+
+        /// <summary>Đổi tọa độ trong trang (CSS px) sang tọa độ gửi qua DevTools Input (đã tính thu phóng).</summary>
+        private async Task<(double x, double y)> ToInputPointAsync(double x, double y)
+        {
+            var (sx, sy) = await GetInputScaleAsync();
+            return (x / sx, y / sy);
+        }
+
         /// <summary>Chạm (touch) vào 1 điểm như ngón tay trên màn hình cảm ứng.</summary>
         private async Task TapAsync(double x, double y)
         {
+            (x, y) = await ToInputPointAsync(x, y);
             // Bật hỗ trợ cảm ứng cho trang (máy không có màn hình cảm ứng vẫn nhận được sự kiện touch)
             await _core.CallDevToolsProtocolMethodAsync("Emulation.setTouchEmulationEnabled",
                 JsonSerializer.Serialize(new { enabled = true, maxTouchPoints = 1 }));
@@ -792,6 +840,7 @@ namespace auto_scan_crack
 
         private async Task ClickAsync(double x, double y)
         {
+            (x, y) = await ToInputPointAsync(x, y);   // trang đang thu phóng (80%) vẫn bấm đúng chỗ
             await _core.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent",
                 JsonSerializer.Serialize(new { type = "mouseMoved", x, y }));
             foreach (var type in new[] { "mousePressed", "mouseReleased" })
