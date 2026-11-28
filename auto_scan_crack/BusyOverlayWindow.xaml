@@ -1,0 +1,30 @@
+<Window x:Class="auto_scan_crack.BusyOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Đang thao tác" WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
+        ShowInTaskbar="False" ShowActivated="False" Focusable="False"
+        Background="#59000000" Cursor="Wait">
+    <!-- Lớp phủ mờ trên vùng web: chặn chuột để người dùng không bấm vào web trong lúc app đang tự thao tác.
+         Thẻ thông báo nhỏ ở giữa cho biết đang làm gì. -->
+    <Border VerticalAlignment="Center" HorizontalAlignment="Center" Width="520"
+            Background="White" CornerRadius="10" Padding="28,22" BorderBrush="#2F80ED" BorderThickness="3">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="24" ShadowDepth="0" Opacity="0.5"/>
+        </Border.Effect>
+        <StackPanel>
+            <TextBlock Text="ĐANG TỰ ĐỘNG THAO TÁC TRÊN WEB" FontSize="22" FontWeight="Bold" Foreground="#1F2A44"
+                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+            <TextBlock x:Name="lblTarget" FontSize="16" FontWeight="SemiBold" Foreground="#2F80ED" Margin="0,8,0,0"
+                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+            <ProgressBar IsIndeterminate="True" Height="8" Margin="0,16,0,0" Foreground="#2F80ED"/>
+            <TextBlock x:Name="lblDetail" FontSize="14" Foreground="#344054" Margin="0,14,0,0"
+                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxHeight="60"
+                       TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="Vui lòng KHÔNG bấm vào trang web cho đến khi xong." FontSize="15" FontWeight="SemiBold"
+                       Foreground="#B00020" Margin="0,14,0,0" HorizontalAlignment="Center" TextAlignment="Center"
+                       TextWrapping="Wrap"/>
+            <TextBlock x:Name="lblElapsed" FontSize="13" Foreground="#667085" Margin="0,6,0,0"
+                       HorizontalAlignment="Center"/>
+        </StackPanel>
+    </Border>
+</Window>

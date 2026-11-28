@@ -193,6 +193,8 @@ namespace auto_scan_crack
             _busy = true;
             LockTabs(tab);
             lblCurrentPO.Text = po;
+            // Lớp phủ "đang thao tác" trên vùng web: người dùng biết app đang chạy và không bấm thêm vào web
+            ShowBusyOverlay($"{tab.Title} — PO {po}");
 
             // Báo xanh 2 giây: đã bắt đầu chạy, không quét thêm PO
             ShowInfo("BẮT ĐẦU CHẠY PO", $"PO: {po} — {tab.Title}\nVui lòng không quét thêm PO cho đến khi hoàn tất.", 2);
@@ -218,6 +220,7 @@ namespace auto_scan_crack
             {
                 _busy = false;
                 LockTabs(null);
+                HideBusyOverlay();
             }
         }
 
@@ -377,7 +380,11 @@ namespace auto_scan_crack
 
         private void BtnHome_Click(object sender, RoutedEventArgs e) => SelectedTab?.View.CoreWebView2?.Navigate(HomeUrl);
 
-        private void SetStatus(string text) => lblStatus.Text = text;
+        private void SetStatus(string text)
+        {
+            lblStatus.Text = text;
+            _busyOverlay?.SetDetail(text);   // đang chạy PO → hiện bước đang làm trên lớp phủ
+        }
 
         private AlertWindow? _info;
 
