@@ -82,29 +82,53 @@ namespace auto_scan_crack
         /// Script chèn vào mọi trang: bắt chuỗi do máy quét gõ (gõ rất nhanh, kết thúc bằng Enter)
         /// khi con trỏ đang nằm trong trang web. Chỉ bắt 3 loại mã app hiểu (xem ScanClassifier):
         /// mã máy "TRTB…", MSNV 4–5 chữ số, PO 12 chữ số → báo về app. Mã khác để trang tự xử lý.
+        /// - Nhận theo tốc độ TRUNG BÌNH (≤ 60ms/ký tự) nên máy quét khựng 1 nhịp vẫn nhận được ngay
+        ///   (trước đây chỉ cần 1 phím chậm hơn 50ms là mất mã, phải quét lại → cảm giác nhận diện lâu).
+        /// - Nhận xong thì gỡ các ký tự máy quét đã lọt vào trang (bộ đệm mã vạch keyBuffer của trang, ô đang nhập),
+        ///   tránh lần nhập PO sau bị dính số cũ thành chuỗi dài.
         /// </summary>
         public static readonly string ScanHookScript = """
             (() => {
               if (window.__autoScanHook) return;
               window.__autoScanHook = true;
-              const MAX_GAP_MS = 50;   // máy quét gõ < 50ms/ký tự, người gõ tay chậm hơn nhiều
+              const RESET_GAP_MS = 250;   // ngừng lâu hơn mức này → bắt đầu chuỗi mới
+              const AVG_MAX_MS = 60;      // máy quét trung bình < 60ms/ký tự, người gõ tay chậm hơn nhiều
               const KNOWN = /^(TRTB.+|\d{4,5}|\d{12})$/i;
-              let buf = '', last = 0;
+              let buf = '', first = 0, last = 0;
+
+              // Gỡ mã vừa quét khỏi trang (nếu các phím đã được trang ghi nhận)
+              const undoOnPage = code => {
+                const C = code.toUpperCase();
+                try {
+                  if (typeof keyBuffer === 'string' && keyBuffer.toUpperCase().endsWith(C))
+                    keyBuffer = keyBuffer.slice(0, keyBuffer.length - C.length);
+                } catch (_) { }
+                const el = document.activeElement;
+                if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && typeof el.value === 'string'
+                    && el.value.toUpperCase().endsWith(C))
+                  el.value = el.value.slice(0, el.value.length - C.length);
+              };
+
               window.addEventListener('keydown', e => {
                 if (window.__autoScanPaused) { buf = ''; return; }   // app đang tự gõ → bỏ qua
                 const now = performance.now();
-                if (now - last > MAX_GAP_MS) buf = '';
+                if (now - last > RESET_GAP_MS) { buf = ''; first = now; }
                 last = now;
                 if (e.key === 'Enter') {
-                  if (buf.length > 1 && KNOWN.test(buf)) {
+                  const avg = buf.length > 0 ? (now - first) / buf.length : Infinity;
+                  if (buf.length > 1 && avg <= AVG_MAX_MS && KNOWN.test(buf)) {
                     e.preventDefault();               // không để Enter của máy quét submit form
                     e.stopImmediatePropagation();
+                    undoOnPage(buf);
                     window.chrome.webview.postMessage(JSON.stringify({ type: 'scan', code: buf }));
                   }
                   buf = '';
                   return;
                 }
-                if (e.key && e.key.length === 1) buf += e.key;
+                if (e.key && e.key.length === 1) {
+                  if (buf.length === 0) first = now;
+                  buf += e.key;
+                }
               }, true);
             })();
             """;
@@ -404,8 +428,22 @@ namespace auto_scan_crack
                 return LoggedInAnotherProcessError(_terminalId);
             if (lblPo is not { } pp)
                 return $"Sau 30 giây không thấy {PoLabelSelector} ({missingHint}) nên chưa nhập PO.";
+
+            // Gỡ các chữ số còn sót trong bộ đệm mã vạch của trang trước khi nhập: nếu còn số của lần quét trước,
+            // trang sẽ ghép với PO mới thành chuỗi dài sai. Chỉ bỏ phần số ở cuối, giữ tiền tố chữ (vd "TR") nếu trang có đặt.
+            await EvalAsync("(() => { try { if (typeof keyBuffer === 'string') keyBuffer = keyBuffer.replace(/\\d+$/, ''); } catch (_) { } return true; })()");
+
             await ClickAsync(pp.x, pp.y);
             await Task.Delay(300);
+
+            // Bấm xong mà con trỏ nằm trong ô nhập có sẵn chữ → bôi đen để gõ đè, không gõ nối vào
+            await EvalAsync("""
+                (() => {
+                  const el = document.activeElement;
+                  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.value) el.select();
+                  return true;
+                })()
+                """);
 
             // Gõ PO rồi nhấn Enter
             await TypeAndEnterAsync(po);
