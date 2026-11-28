@@ -63,23 +63,27 @@
                 <TextBlock Grid.Column="0" Text="TERMINAL ID" Foreground="White" FontSize="18" FontWeight="Bold"
                            VerticalAlignment="Center" Margin="0,0,14,0"/>
 
-                <Border Grid.Column="1" Background="White" CornerRadius="4" Width="180" Height="38"
-                        BorderBrush="#99FFFFFF" BorderThickness="2" Margin="0,0,24,0">
-                    <TextBox x:Name="txtTerminalId" BorderThickness="0" Background="Transparent"
+                <!-- Ô CHỈ HIỂN THỊ (nền tối, chữ trắng, không viền nhập liệu) để người dùng không tưởng phải bấm vào đây mới quét;
+                     mọi mã đều quét ở ô QUÉT MÃ, app tự đưa vào đúng chỗ. Bấm vào ô này → con trỏ quay về ô QUÉT MÃ. -->
+                <Border Grid.Column="1" Background="#2C3B5E" CornerRadius="4" Width="180" Height="38"
+                        BorderThickness="0" Margin="0,0,24,0" Cursor="Arrow"
+                        PreviewMouseDown="DisplayOnlyField_PreviewMouseDown">
+                    <TextBox x:Name="txtTerminalId" BorderThickness="0" Background="Transparent" Foreground="#FFD54F"
                              FontSize="18" FontWeight="SemiBold" VerticalContentAlignment="Center"
-                             Padding="8,0" IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                             ToolTip="Mã máy: quét/gõ mã TRTB… rồi Enter (con trỏ ở đâu cũng được). Tự lưu lại cho lần mở app sau."/>
+                             Padding="8,0" IsReadOnly="True" IsReadOnlyCaretVisible="False" Focusable="False" Cursor="Arrow"
+                             ToolTip="Chỉ hiển thị. Quét mã máy (TRTB…) ở ô QUÉT MÃ — app tự điền vào đây và lưu cho lần mở app sau."/>
                 </Border>
 
                 <TextBlock Grid.Column="2" Text="MSNV" Foreground="White" FontSize="18" FontWeight="Bold"
                            VerticalAlignment="Center" Margin="0,0,14,0"/>
 
-                <Border Grid.Column="3" Background="White" CornerRadius="4" Width="180" Height="38"
-                        BorderBrush="#99FFFFFF" BorderThickness="2" Margin="0,0,24,0">
-                    <TextBox x:Name="txtMsnv" BorderThickness="0" Background="Transparent"
+                <Border Grid.Column="3" Background="#2C3B5E" CornerRadius="4" Width="180" Height="38"
+                        BorderThickness="0" Margin="0,0,24,0" Cursor="Arrow"
+                        PreviewMouseDown="DisplayOnlyField_PreviewMouseDown">
+                    <TextBox x:Name="txtMsnv" BorderThickness="0" Background="Transparent" Foreground="#FFD54F"
                              FontSize="18" FontWeight="SemiBold" VerticalContentAlignment="Center"
-                             Padding="8,0" IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                             ToolTip="MSNV: quét/gõ 4–5 chữ số rồi Enter (con trỏ ở đâu cũng được). Tự lưu lại cho lần mở app sau."/>
+                             Padding="8,0" IsReadOnly="True" IsReadOnlyCaretVisible="False" Focusable="False" Cursor="Arrow"
+                             ToolTip="Chỉ hiển thị. Quét MSNV (4–5 chữ số) ở ô QUÉT MÃ — app tự điền vào đây và lưu cho lần mở app sau."/>
                 </Border>
 
                 <TextBlock Grid.Column="4" Text="QUÉT MÃ" Foreground="White" FontSize="18" FontWeight="Bold"
