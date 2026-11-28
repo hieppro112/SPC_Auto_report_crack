@@ -166,13 +166,13 @@ namespace auto_scan_crack
             var terminalId = txtTerminalId.Text.Trim();
             if (terminalId.Length == 0)
             {
-                ShowError("CHƯA NHẬP TERMINAL ID", "Vui lòng nhập Terminal ID trước khi quét PO.", txtTerminalId);
+                ShowError("CHƯA NHẬP TERMINAL ID", "Vui lòng quét mã máy (TRTB…) ở ô QUÉT MÃ trước khi quét PO.", txtPO);
                 return;
             }
             var msnv = txtMsnv.Text.Trim();
             if (msnv.Length == 0)
             {
-                ShowError("CHƯA NHẬP MSNV", "Vui lòng nhập MSNV trước khi quét PO.", txtMsnv);
+                ShowError("CHƯA NHẬP MSNV", "Vui lòng quét MSNV ở ô QUÉT MÃ trước khi quét PO.", txtPO);
                 return;
             }
             if (IsMsnvExpired)
@@ -193,6 +193,8 @@ namespace auto_scan_crack
             _busy = true;
             LockTabs(tab);
             lblCurrentPO.Text = po;
+            // Lớp phủ "đang thao tác" trên vùng web: người dùng biết app đang chạy và không bấm thêm vào web
+            ShowBusyOverlay($"{tab.Title} — PO {po}");
 
             // Báo xanh 2 giây: đã bắt đầu chạy, không quét thêm PO
             ShowInfo("BẮT ĐẦU CHẠY PO", $"PO: {po} — {tab.Title}\nVui lòng không quét thêm PO cho đến khi hoàn tất.", 2);
@@ -218,6 +220,7 @@ namespace auto_scan_crack
             {
                 _busy = false;
                 LockTabs(null);
+                HideBusyOverlay();
             }
         }
 
@@ -377,7 +380,19 @@ namespace auto_scan_crack
 
         private void BtnHome_Click(object sender, RoutedEventArgs e) => SelectedTab?.View.CoreWebView2?.Navigate(HomeUrl);
 
-        private void SetStatus(string text) => lblStatus.Text = text;
+        /// <summary>Bấm vào ô chỉ hiển thị (Terminal ID / MSNV) → đưa con trỏ về ô QUÉT MÃ, nhắc người dùng quét ở đó.</summary>
+        private void DisplayOnlyField_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            txtPO.Focus();
+            SetStatus("Ô Terminal ID / MSNV chỉ để hiển thị — cứ quét mã (mã máy, MSNV, PO), app tự đưa vào đúng ô.");
+        }
+
+        private void SetStatus(string text)
+        {
+            lblStatus.Text = text;
+            _busyOverlay?.SetDetail(text);   // đang chạy PO → hiện bước đang làm trên lớp phủ
+        }
 
         private AlertWindow? _info;
 

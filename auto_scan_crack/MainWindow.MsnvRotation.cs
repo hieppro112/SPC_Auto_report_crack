@@ -28,7 +28,15 @@ namespace auto_scan_crack
         private MsnvState? _msnvState;
         private bool _msnvExpiredNotified;
 
-        private static readonly Brush MsnvExpiredBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xCD, 0xD2));
+        // Ô MSNV nền tối chữ vàng; hết giờ → nền đỏ đậm chữ trắng cho nổi bật
+        private static readonly Brush MsnvExpiredBrush = new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28));
+        private static readonly Brush MsnvNormalForeground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD5, 0x4F));
+
+        private void SetMsnvExpiredLook(bool expired)
+        {
+            txtMsnv.Background = expired ? MsnvExpiredBrush : Brushes.Transparent;
+            txtMsnv.Foreground = expired ? Brushes.White : MsnvNormalForeground;
+        }
 
         private bool IsMsnvExpired => _msnvState is { } s && DateTime.Now - s.ScannedAt >= MsnvValidity;
 
@@ -96,7 +104,7 @@ namespace auto_scan_crack
             if (state is null)
             {
                 lblMsnvRemaining.Text = "—";
-                txtMsnv.ClearValue(BackgroundProperty);
+                SetMsnvExpiredLook(false);
                 return;
             }
 
@@ -105,13 +113,13 @@ namespace auto_scan_crack
             {
                 lblMsnvCaption.Text = $"Đổi NV lúc {state.ScannedAt + MsnvValidity:HH:mm}";
                 lblMsnvRemaining.Text = FormatDuration(remaining);
-                txtMsnv.ClearValue(BackgroundProperty);
+                SetMsnvExpiredLook(false);
                 return;
             }
 
             lblMsnvCaption.Text = "Đổi nhân viên";
             lblMsnvRemaining.Text = "ĐẾN GIỜ ĐỔI";
-            txtMsnv.Background = MsnvExpiredBrush;
+            SetMsnvExpiredLook(true);
 
             if (!_msnvExpiredNotified)
             {
